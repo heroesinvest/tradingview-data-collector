@@ -293,102 +293,101 @@ class TVPineLogsExtractor {
     }
     
     async extractPineLogsFromVirtualList() {
-        const entries = [];
-        let scrollAttempts = 0;
-        const maxScrollAttempts = 100;
-        
         console.log('Starting Pine Logs extraction from virtual list');
         
         try {
-            // Find the Pine Logs panel
-            const logsPanel = await this.findPineLogsPanel();
-            if (!logsPanel) {
-                throw new Error('Pine Logs panel not found');
+            const viewport = await this.findPineLogsContainer();
+            if (!viewport) {
+                throw new Error('Pine Logs virtual list viewport not found');
             }
             
-            // Find the virtual list container
-            const virtualList = await this.findVirtualListContainer(logsPanel);
-            if (!virtualList) {
-                throw new Error('Virtual list container not found');
-            }
+            // Get scroll speed configuration
+            const scrollSpeedSelect = document.getElementById('scrollSpeed');
+            const scrollDelay = scrollSpeedSelect ? parseInt(scrollSpeedSelect.value) : 100;
+            const scrollIncrement = {
+                25: 10000,
+                50: 5000,
+                100: 3000,
+                200: 1000,
+                500: 500
+            }[scrollDelay] || 3000;
             
-            // IMPORTANT: Scroll to the very top before starting
+            console.log(`[CONFIG] Scroll speed: ${scrollDelay}ms delay, ${scrollIncrement}px increment`);
+            
+            const entries = [];
+            const seenEntries = new Set();
+            let scrollAttempts = 0;
+            const maxScrollAttempts = 500; // Increased from 100
+            let consecutiveNoNewEntries = 0;
+            const maxConsecutiveNoNewEntries = 20; // Increased from 10
+            
+            // Scroll to top first
             console.log('[DEBUG] Scrolling to top of list...');
-            virtualList.scrollTop = 0;
-            await this.sleep(500); // Wait for scroll to complete and DOM to update
-            console.log('[DEBUG] At top, starting extraction from position:', virtualList.scrollTop);
+            viewport.scrollTop = 0;
+            await this.sleep(500);
+            console.log('[DEBUG] At top, starting extraction from position:', viewport.scrollTop);
+            console.log('[DEBUG] Viewport scrollHeight:', viewport.scrollHeight, 'clientHeight:', viewport.clientHeight);
             
-            let previousItemCount = 0;
-            let stableCount = 0;
-            
-        while (scrollAttempts < maxScrollAttempts && this.isCollecting) {
-            // Extract currently visible log entries
-            const currentEntries = await this.extractVisibleLogEntries(virtualList);
-            
-            // Add new entries to our collection with deduplication
-            let newEntriesAdded = 0;
-            currentEntries.forEach(entry => {
-                const key = entry.timestamp + '|' + entry.content;
-                if (!entries.some(e => (e.timestamp + '|' + e.content) === key)) {
-                    entries.push(entry);
-                    newEntriesAdded++;
+            // Extract entries while scrolling
+            while (scrollAttempts < maxScrollAttempts && consecutiveNoNewEntries < maxConsecutiveNoNewEntries) {
+                // Extract entries at current scroll position
+                const currentEntries = await this.extractVisibleLogEntries();
+                
+                // Filter for new unique entries
+                const newEntries = currentEntries.filter(entry => {
+                    const key = this.generateEntryKey(entry);
+                    if (seenEntries.has(key)) {
+                        return false;
+                    }
+                    seenEntries.add(key);
+                    return true;
+                });
+                
+                console.log(`[DEBUG] Scroll ${scrollAttempts}: Found ${currentEntries.length} current, added ${newEntries.length} new, total: ${entries.length}`);
+                
+                if (newEntries.length === 0) {
+                    consecutiveNoNewEntries++;
+                    console.log(`[DEBUG] No new entries (stable count: ${consecutiveNoNewEntries}/${maxConsecutiveNoNewEntries})`);
+                    if (consecutiveNoNewEntries >= maxConsecutiveNoNewEntries) {
+                        // Check if we've reached the bottom
+                        const isAtBottom = (viewport.scrollTop + viewport.clientHeight) >= (viewport.scrollHeight - 100);
+                        console.log(`[DEBUG] At bottom? ${isAtBottom} (scrollTop: ${viewport.scrollTop}, scrollHeight: ${viewport.scrollHeight})`);
+                        if (isAtBottom) {
+                            console.log('Reached bottom of list, stopping');
+                            break;
+                        }
+                    }
+                } else {
+                    consecutiveNoNewEntries = 0;
+                    entries.push(...newEntries);
                 }
-            });
-            
-            console.log(`[DEBUG] Scroll ${scrollAttempts}: Found ${currentEntries.length} current, added ${newEntriesAdded} new, total: ${entries.length}`);
-            
-            // Check if we're getting new items
-            if (entries.length === previousItemCount) {
-                stableCount++;
-                console.log(`[DEBUG] No new entries (stable count: ${stableCount}/10)`);
-                if (stableCount >= 10) { // Increased from 5 to 10 for more thorough collection
-                    console.log('No new entries found after 10 scroll attempts, stopping');
-                    break;
+                
+                // Scroll down
+                await this.scrollVirtualList(viewport, scrollIncrement);
+                scrollAttempts++;
+                
+                // Configurable delay between scrolls
+                await this.sleep(scrollDelay);
+                
+                // Log progress every 10 scrolls
+                if (scrollAttempts % 10 === 0) {
+                    console.log(`[PROGRESS] Scroll ${scrollAttempts}/${maxScrollAttempts}, entries: ${entries.length}, scroll: ${Math.round(viewport.scrollTop)}/${viewport.scrollHeight}`);
                 }
-            } else {
-                stableCount = 0;
-                previousItemCount = entries.length;
             }
             
-            // Check scroll position to detect if we've reached the end
-            const currentScrollTop = virtualList.scrollTop;
-            const maxScroll = virtualList.scrollHeight - virtualList.clientHeight;
-            
-            if (currentScrollTop >= maxScroll - 10) {
-                console.log('[DEBUG] Reached end of scroll area');
-                // Try a few more times in case there's lazy loading
-                if (stableCount >= 3) {
-                    break;
-                }
-            }
-            
-            // Scroll to load more items
-            await this.scrollVirtualList(virtualList);
-            await this.sleep(100); // Reduced from 500ms to 100ms for faster scrolling
-            
-            scrollAttempts++;
-            
-            // Update progress more frequently
-            if (scrollAttempts % 5 === 0) {
-                console.log(`[PROGRESS] Scroll attempt ${scrollAttempts}/${maxScrollAttempts}, entries: ${entries.length}`);
-                this.sendMessage({ type: 'extractionProgress', data: {
-                    scrollAttempts,
-                    maxScrollAttempts,
-                    entriesFound: entries.length,
-                    currentScrollTop: virtualList.scrollTop,
-                    maxScroll: virtualList.scrollHeight
-                }});
-            }
-        }            console.log(`Extraction complete. Found ${entries.length} total entries after ${scrollAttempts} scroll attempts`);
-            
-            // Update progress display after extraction
+            console.log(`Extraction complete. Found ${entries.length} total entries after ${scrollAttempts} scroll attempts`);
             this.updateProgressDisplay();
             
+            // Update floating window
+            const filteredEntries = this.filterDuplicates(entries);
+            this.updateFloatingWindowStatus(`Found ${entries.length} entries, ${filteredEntries.length} unique`, 'success');
+            
+            return filteredEntries;
+            
         } catch (error) {
-            console.error('Error extracting from virtual list:', error);
+            console.error('[ERROR] Extract from virtual list failed:', error);
+            throw error;
         }
-        
-        return entries;
     }
     
     async findPineLogsPanel() {
@@ -479,110 +478,107 @@ class TVPineLogsExtractor {
         return logsPanel;
     }
     
-    async extractVisibleLogEntries(container) {
+    async extractVisibleLogEntries() {
+        const logElements = document.querySelectorAll('.msg-zsZSd11H');
+        console.log(`[DEBUG] Found ${logElements.length} log elements using selector: .msg-zsZSd11H`);
+        
         const entries = [];
-        
-        // Use reference implementation selectors for log messages
-        const logSelectors = [
-            '.msg-zsZSd11H',                    // TradingView's log message class
-            '[class*="msg-"]',                  // Any message class variant
-            '.pine-console .log-entry',         // Pine console log entries
-            '.pine-logs .log-item',             // Pine logs items
-            '[class*="log-entry"]',
-            '[class*="log-item"]',
-            '[class*="message"]',
-            'li',
-            '[role="listitem"]'
-        ];
-        
-        let logElements = [];
-        for (const selector of logSelectors) {
-            const elements = container.querySelectorAll(selector);
-            if (elements.length > 0) {
-                logElements = Array.from(elements);
-                console.log(`[DEBUG] Found ${elements.length} log elements using selector: ${selector}`);
-                break;
-            }
-        }
-        
         console.log(`[DEBUG] Processing ${logElements.length} log elements`);
         
-        logElements.forEach(logElement => {
+        let processedCount = 0;
+        let skippedAlreadyProcessed = 0;
+        let skippedNotOurEntry = 0;
+        let failedParse = 0;
+        
+        for (const logElement of logElements) {
             // Skip if already processed
             if (logElement.hasAttribute('data-tv-processed')) {
-                return;
+                skippedAlreadyProcessed++;
+                continue;
             }
             
             try {
-                const logText = logElement.textContent?.trim();
-                if (!logText) return;
+                // Get the text content
+                const logText = logElement.textContent.trim();
                 
-                // Check if this looks like a JSON log entry from our indicator
-                if (this.isOurLogEntry(logText)) {
-                    // Extract timestamp and JSON separately
-                    // Format: [2023-01-01 12:00:00]: {"symbol": ...}
-                    const timestampMatch = logText.match(/^\[(.*?)\]:\s*/);
-                    
-                    if (timestampMatch) {
-                        const timestamp = timestampMatch[1];
-                        const jsonText = logText.substring(timestampMatch[0].length);
-                        
-                        try {
-                            const parsedData = JSON.parse(jsonText);
-                            
-                            if (parsedData.symbol && parsedData.timeframe) {
-                                // Normalize timestamps to ISO format
-                                parsedData.timestamp = this.normalizeTimestamp(timestamp);
-                                parsedData.collected_at = new Date().toISOString();
-                                
-                                // Normalize other datetime fields if present
-                                if (parsedData.entry_datetime) {
-                                    parsedData.entry_datetime = this.normalizeTimestamp(parsedData.entry_datetime);
-                                }
-                                if (parsedData.entry_date) {
-                                    parsedData.entry_date = this.normalizeTimestamp(parsedData.entry_date);
-                                }
-                                
-                                entries.push({
-                                    timestamp: parsedData.timestamp,
-                                    content: jsonText,
-                                    element: logElement,
-                                    parsed: parsedData
-                                });
-                                
-                                // Update progress counters
-                                this.totalEntriesCount++;
-                                this.currentDateEntriesCount++;
-                                this.currentSymbolEntriesCount++;
-                                
-                                // Track last logged time
-                                if (parsedData.entry_datetime || parsedData.entry_date || parsedData.timestamp) {
-                                    this.lastLoggedTime = parsedData.entry_datetime || parsedData.entry_date || parsedData.timestamp;
-                                }
-                                
-                                console.log('[DEBUG] Found valid log entry:', parsedData.symbol, parsedData.type || 'unknown');
-                                
-                                // Mark as processed
-                                logElement.setAttribute('data-tv-processed', 'true');
-                            }
-                        } catch (parseError) {
-                            console.error('[DEBUG] Failed to parse log entry JSON:', parseError);
-                            console.error('[DEBUG] JSON text was:', jsonText);
-                            // Mark as processed to avoid repeated errors
-                            logElement.setAttribute('data-tv-processed', 'true');
-                        }
-                    } else {
-                        console.warn('[DEBUG] No timestamp found in log:', logText.substring(0, 100));
-                    }
+                // DEBUG: Log first 200 chars of every 10th element
+                if (processedCount % 10 === 0) {
+                    console.log(`[DEBUG Sample ${processedCount}]:`, logText.substring(0, 200));
                 }
+                
+                // Check if this is our log entry (contains PreData or PostData)
+                if (!this.isOurLogEntry(logText)) {
+                    skippedNotOurEntry++;
+                    if (processedCount % 10 === 0) {
+                        console.log(`[DEBUG] Not our entry (no PreData/PostData found)`);
+                    }
+                    continue;
+                }
+                
+                console.log(`[DEBUG] Found our entry! Type:`, logText.includes('PreData') ? 'PreData' : 'PostData');
+                
+                // Extract JSON from log text (after timestamp)
+                // Format: [2023-01-01 12:00:00]: {"symbol": "BINANCE:BTCUSDT.P", ...}
+                const timestampMatch = logText.match(/^\[(.*?)\]:\s*/);
+                if (!timestampMatch) {
+                    console.warn('[DEBUG] No timestamp found in log entry:', logText.substring(0, 100));
+                    continue;
+                }
+                
+                const timestamp = timestampMatch[1];
+                const jsonText = logText.substring(timestampMatch[0].length);
+                console.log(`[DEBUG] Timestamp: ${timestamp}`);
+                console.log(`[DEBUG] JSON text (first 200 chars):`, jsonText.substring(0, 200));
+                
+                try {
+                    const parsedData = JSON.parse(jsonText);
+                    console.log(`[DEBUG] Successfully parsed JSON:`, Object.keys(parsedData));
+                    
+                    // Normalize timestamp to ISO 8601
+                    if (parsedData.entry_datetime) {
+                        parsedData.entry_datetime = this.normalizeTimestamp(parsedData.entry_datetime);
+                    } else if (parsedData.entry_date) {
+                        parsedData.entry_date = this.normalizeTimestamp(parsedData.entry_date);
+                    } else if (timestamp) {
+                        // Use log timestamp if no entry timestamp
+                        parsedData.timestamp = this.normalizeTimestamp(timestamp);
+                    }
+                    
+                    entries.push(parsedData);
+                    
+                    // Mark as processed
+                    logElement.setAttribute('data-tv-processed', 'true');
+                    
+                    // Increment progress counters
+                    this.totalEntriesCount++;
+                    this.currentDateEntriesCount++;
+                    this.currentSymbolEntriesCount++;
+                    
+                    // Track last logged time
+                    this.lastLoggedTime = parsedData.entry_datetime || parsedData.entry_date || parsedData.timestamp;
+                    
+                    console.log(`[DEBUG] ✅ Successfully added entry #${entries.length}`);
+                    
+                } catch (parseError) {
+                    failedParse++;
+                    console.warn('[DEBUG] ❌ Failed to parse JSON:', parseError.message);
+                    console.warn('[DEBUG] JSON text:', jsonText.substring(0, 300));
+                }
+                
+                processedCount++;
+                
             } catch (error) {
-                console.error('Error processing log element:', error);
-                // Mark as processed to avoid repeated errors
-                logElement.setAttribute('data-tv-processed', 'true');
+                console.warn('[DEBUG] Error processing log element:', error.message);
             }
-        });
+        }
         
-        console.log(`[DEBUG] Extracted ${entries.length} valid log entries`);
+        console.log(`[DEBUG] Extraction stats:`);
+        console.log(`  - Total elements found: ${logElements.length}`);
+        console.log(`  - Already processed (skipped): ${skippedAlreadyProcessed}`);
+        console.log(`  - Not our entry (skipped): ${skippedNotOurEntry}`);
+        console.log(`  - Failed JSON parse: ${failedParse}`);
+        console.log(`  - Successfully extracted: ${entries.length}`);
+        
         return entries;
     }
     
@@ -1209,7 +1205,7 @@ class TVPineLogsExtractor {
                     </div>
                     
                     <!-- Date Range -->
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 16px;">
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px;">
                         <div>
                             <label style="display: block; margin-bottom: 4px; font-size: 12px; color: #ccc;">Start Date:</label>
                             <input id="startDateInput" type="date" value="2023-01-01" style="
@@ -1236,6 +1232,27 @@ class TVPineLogsExtractor {
                                 box-sizing: border-box;
                             ">
                         </div>
+                    </div>
+                    
+                    <!-- Scroll Speed Selector -->
+                    <div style="margin-bottom: 16px;">
+                        <label style="display: block; margin-bottom: 4px; font-size: 12px; color: #ccc;">Scroll Speed:</label>
+                        <select id="scrollSpeed" style="
+                            width: 100%;
+                            padding: 6px;
+                            background: #2d2d2d;
+                            border: 1px solid #555;
+                            color: #fff;
+                            border-radius: 4px;
+                            font-size: 12px;
+                            box-sizing: border-box;
+                        ">
+                            <option value="25">⚡ Very Fast (25ms, 10000px)</option>
+                            <option value="50">🚀 Fast (50ms, 5000px)</option>
+                            <option value="100" selected>⏩ Normal (100ms, 3000px)</option>
+                            <option value="200">🐢 Slow (200ms, 1000px)</option>
+                            <option value="500">🐌 Very Slow (500ms, 500px)</option>
+                        </select>
                     </div>
                     
                     <!-- Progress Display -->
@@ -1357,25 +1374,23 @@ class TVPineLogsExtractor {
     }
     
     setupFloatingWindowEvents() {
-        // File upload handler
+        // File upload handler - FIXED: Handle Windows/Unix newlines correctly
         const fileInput = document.getElementById('symbolsFileInput');
-        fileInput?.addEventListener('change', (e) => {
+        fileInput?.addEventListener('change', async (e) => {
             const file = e.target.files[0];
             if (file && file.name.endsWith('.txt')) {
-                const reader = new FileReader();
-                reader.onload = (event) => {
-                    const content = event.target.result;
-                    // Parse symbols (one per line or comma-separated)
-                    const symbols = content.split(/[,\n]/)
-                        .map(s => s.trim())
-                        .filter(s => s.length > 0 && s.includes(':'));
-                    
-                    // Update UI
-                    document.getElementById('symbolsLoaded').textContent = symbols.length;
-                    document.getElementById('symbolsInput').value = symbols.join(', ');
-                    this.updateFloatingWindowStatus(`📁 Loaded ${symbols.length} symbols from file`, 'success');
-                };
-                reader.readAsText(file);
+                const text = await file.text();
+                // Split by newline (Windows \r\n or Unix \n) AND comma, remove empty
+                const symbols = text.split(/[\r\n,]+/)
+                    .map(s => s.trim())
+                    .filter(s => s.length > 0);
+                
+                // Update UI
+                document.getElementById('symbolsLoaded').textContent = symbols.length;
+                document.getElementById('symbolsInput').value = symbols.join(', ');
+                
+                console.log(`📁 Loaded ${symbols.length} symbols:`, symbols);
+                this.updateFloatingWindowStatus(`📁 Loaded ${symbols.length} symbols from file`, 'success');
             } else {
                 this.updateFloatingWindowStatus('⚠️ Please select a .txt file', 'error');
             }
