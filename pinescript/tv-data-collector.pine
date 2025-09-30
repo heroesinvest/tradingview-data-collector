@@ -44,6 +44,12 @@ sma200 = ta.sma(close, sma_length)
 ema20 = ta.ema(close, ema_length)
 atr200 = ta.atr(atr_period)
 
+// Auxiliary calculations (extracted to avoid warnings)
+vol_sma_20 = ta.sma(volume, 20)
+vol_stdev_20 = ta.stdev(volume, 20)
+lowest_pullback = ta.lowest(low, pullback_lookback)
+highest_pullback = ta.highest(high, pullback_lookback)
+
 // Plot moving averages
 plot(show_visuals ? sma200 : na, color=color.purple, linewidth=2, title="SMA 200")
 plot(show_visuals ? ema20 : na, color=color.gray, linewidth=2, title="EMA 20")
@@ -158,14 +164,12 @@ extract_predata_features(signal_side) =>
         lower_wick = round3((math.min(open, close) - low) * atr_inv)
         
         // === VOLUME ===
-        vol_sma = ta.sma(volume, 20)
-        volume_ratio = round3(volume / vol_sma)
-        vol_stdev = ta.stdev(volume, 20)
-        volume_zscore = vol_stdev > 0 ? round3((volume - vol_sma) / vol_stdev) : 0.0
+        volume_ratio = round3(volume / vol_sma_20)
+        volume_zscore = vol_stdev_20 > 0 ? round3((volume - vol_sma_20) / vol_stdev_20) : 0.0
         
         // === PULLBACK ===
-        pullback_up = round3((ema20 - ta.lowest(low, pullback_lookback)) * atr_inv)
-        pullback_down = round3((ta.highest(high, pullback_lookback) - ema20) * atr_inv)
+        pullback_up = round3((ema20 - lowest_pullback) * atr_inv)
+        pullback_down = round3((highest_pullback - ema20) * atr_inv)
         
         // === OHLCV ARRAYS ===
         var open_arr = array.new<float>()
@@ -261,7 +265,11 @@ add_position_tracking(entry_price, entry_atr, is_long, signal_num) =>
 update_positions() =>
     completed_positions = array.new<string>()
     
-    for i = array.size(active_entry_prices) - 1 to 0
+    // Check if we have active positions to avoid runtime error
+    if array.size(active_entry_prices) == 0
+        completed_positions
+    else
+        for i = array.size(active_entry_prices) - 1 to 0
         entry_price = array.get(active_entry_prices, i)
         entry_atr = array.get(active_entry_atrs, i)
         is_long = array.get(active_is_long, i)
@@ -335,19 +343,23 @@ update_positions() =>
             array.remove(active_bars_to_max, i)
             array.remove(active_bars_to_min, i)
             array.remove(active_signal_nums, i)
-    
-    completed_positions
+        
+        completed_positions
 
 // ============================================================================
 // SIGNAL PROCESSING AND ALERTS
 // ============================================================================
+
+// Extract features for both signal types (to avoid warnings)
+long_features = long_signal ? extract_predata_features("long") : [na, ""]
+short_features = short_signal ? extract_predata_features("short") : [na, ""]
 
 // Process new signals
 if long_signal and in_date_range and barstate.isconfirmed
     last_signal_long := true
     signal_counter := signal_counter + 1
     
-    [atr_val, predata_json] = extract_predata_features("long")
+    [atr_val, predata_json] = long_features
     if predata_json != "" and atr_val > 0
         if enable_alerts
             log.info(predata_json)
@@ -360,7 +372,7 @@ if short_signal and in_date_range and barstate.isconfirmed
     last_signal_short := true
     signal_counter := signal_counter + 1
     
-    [atr_val, predata_json] = extract_predata_features("short")
+    [atr_val, predata_json] = short_features
     if predata_json != "" and atr_val > 0
         if enable_alerts
             log.info(predata_json)
