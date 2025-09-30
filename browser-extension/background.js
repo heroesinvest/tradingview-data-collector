@@ -28,6 +28,9 @@ class TVDataCollectorBackground {
                 case 'download':
                     await this.handleDownload(message.data);
                     break;
+                case 'requestPopupOpen':
+                    await this.handlePopupOpenRequest(sender);
+                    break;
                 case 'collectionProgress':
                 case 'collectionComplete':
                 case 'collectionError':
@@ -59,6 +62,23 @@ class TVDataCollectorBackground {
             
         } catch (error) {
             console.error('Download error:', error);
+        }
+    }
+    
+    async handlePopupOpenRequest(sender) {
+        try {
+            // Show notification to user about clicking extension icon
+            console.log('Popup open requested from tab:', sender.tab?.id);
+            
+            // We can't programmatically open the popup, but we can send a notification
+            if (sender.tab?.id) {
+                await chrome.tabs.sendMessage(sender.tab.id, {
+                    type: 'showClickExtensionHint'
+                });
+            }
+            
+        } catch (error) {
+            console.error('Error handling popup open request:', error);
         }
     }
     

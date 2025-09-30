@@ -19,6 +19,11 @@ class TVPineLogsExtractor {
     init() {
         // Listen for messages from popup
         chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+            if (message.type === 'showClickExtensionHint') {
+                this.showClickExtensionHint();
+                sendResponse({ success: true });
+                return;
+            }
             this.handleMessage(message, sendResponse);
         });
         
@@ -29,6 +34,9 @@ class TVPineLogsExtractor {
         
         // Send ready signal to popup
         this.sendMessage({ type: 'contentScriptReady', data: { url: window.location.href } });
+        
+        // Auto-show popup notification on TradingView
+        this.showAutoPopupNotification();
     }
     
     injectHelperScript() {
@@ -744,6 +752,153 @@ class TVPineLogsExtractor {
     
     sleep(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
+    }
+    
+    showAutoPopupNotification() {
+        // Check if we should show the auto-popup (only once per session)
+        const sessionKey = 'tvDataCollector_autoPopupShown_' + window.location.hostname;
+        if (sessionStorage.getItem(sessionKey)) {
+            return; // Already shown this session
+        }
+        
+        // Wait for page to fully load
+        setTimeout(() => {
+            this.createAutoPopupNotification();
+            sessionStorage.setItem(sessionKey, 'true');
+        }, 3000);
+    }
+    
+    createAutoPopupNotification() {
+        // Create floating notification
+        const notification = document.createElement('div');
+        notification.id = 'tvDataCollectorNotification';
+        notification.innerHTML = `
+            <div style="
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                z-index: 10000;
+                background: linear-gradient(135deg, #1e1e1e 0%, #2d2d2d 100%);
+                color: #4CAF50;
+                padding: 16px 20px;
+                border-radius: 8px;
+                box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+                border: 1px solid #4CAF50;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                font-size: 14px;
+                max-width: 300px;
+                animation: slideIn 0.3s ease-out;
+            ">
+                <div style="display: flex; align-items: center; margin-bottom: 8px;">
+                    <span style="font-size: 18px; margin-right: 8px;">🚀</span>
+                    <strong>TradingView Data Collector Ready!</strong>
+                </div>
+                <div style="color: #ccc; font-size: 12px; margin-bottom: 12px;">
+                    Click the extension icon to start collecting Pine Logs data
+                </div>
+                <div style="display: flex; gap: 8px;">
+                    <button id="openCollector" style="
+                        background: #4CAF50;
+                        color: white;
+                        border: none;
+                        padding: 6px 12px;
+                        border-radius: 4px;
+                        cursor: pointer;
+                        font-size: 12px;
+                        font-weight: bold;
+                    ">Open Collector</button>
+                    <button id="dismissNotification" style="
+                        background: transparent;
+                        color: #888;
+                        border: 1px solid #444;
+                        padding: 6px 12px;
+                        border-radius: 4px;
+                        cursor: pointer;
+                        font-size: 12px;
+                    ">Dismiss</button>
+                </div>
+            </div>
+        `;
+        
+        // Add animation styles
+        const style = document.createElement('style');
+        style.textContent = `
+            @keyframes slideIn {
+                from { transform: translateX(100%); opacity: 0; }
+                to { transform: translateX(0); opacity: 1; }
+            }
+            @keyframes slideOut {
+                from { transform: translateX(0); opacity: 1; }
+                to { transform: translateX(100%); opacity: 0; }
+            }
+        `;
+        document.head.appendChild(style);
+        
+        document.body.appendChild(notification);
+        
+        // Add event listeners
+        const openBtn = notification.querySelector('#openCollector');
+        const dismissBtn = notification.querySelector('#dismissNotification');
+        
+        openBtn.addEventListener('click', () => {
+            // Try to trigger extension popup
+            this.sendMessage({ type: 'requestPopupOpen', data: {} });
+            this.removeNotification(notification);
+        });
+        
+        dismissBtn.addEventListener('click', () => {
+            this.removeNotification(notification);
+        });
+        
+        // Auto-dismiss after 10 seconds
+        setTimeout(() => {
+            if (document.getElementById('tvDataCollectorNotification')) {
+                this.removeNotification(notification);
+            }
+        }, 10000);
+    }
+    
+    removeNotification(notification) {
+        notification.style.animation = 'slideOut 0.3s ease-in';
+        setTimeout(() => {
+            if (notification.parentNode) {
+                notification.parentNode.removeChild(notification);
+            }
+        }, 300);
+    }
+    
+    showClickExtensionHint() {
+        // Show a hint to click the extension icon
+        const hint = document.createElement('div');
+        hint.innerHTML = `
+            <div style="
+                position: fixed;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                z-index: 10001;
+                background: rgba(0,0,0,0.9);
+                color: #4CAF50;
+                padding: 20px;
+                border-radius: 8px;
+                text-align: center;
+                font-family: Arial, sans-serif;
+                border: 2px solid #4CAF50;
+            ">
+                <div style="font-size: 24px; margin-bottom: 10px;">👆</div>
+                <div style="font-size: 16px; font-weight: bold;">Click the extension icon in your browser toolbar!</div>
+                <div style="font-size: 12px; color: #888; margin-top: 8px;">Look for the TradingView Data Collector icon</div>
+            </div>
+        `;
+        
+        document.body.appendChild(hint);
+        
+        // Auto-remove after 3 seconds
+        setTimeout(() => {
+            if (hint.parentNode) {
+                hint.parentNode.removeChild(hint);
+            }
+        }, 3000);
     }
 }
 
