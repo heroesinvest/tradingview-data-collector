@@ -404,6 +404,22 @@ class TVPineLogsExtractor {
         }
     }
     
+    async findPineLogsContainer() {
+        console.log('[DEBUG] findPineLogsContainer() called - searching for scrollable viewport...');
+        
+        // Step 1: Find the Pine Logs panel/widget
+        const panel = await this.findPineLogsPanel();
+        if (!panel) {
+            console.error('[DEBUG] Pine Logs panel not found!');
+            return null;
+        }
+        
+        // Step 2: Find the scrollable container within the panel
+        const container = await this.findVirtualListContainer(panel);
+        console.log('[DEBUG] Found scrollable container:', container);
+        return container;
+    }
+    
     async findPineLogsPanel() {
         console.log('[DEBUG] Starting enhanced Pine logs container search...');
         
@@ -832,32 +848,103 @@ class TVPineLogsExtractor {
     async navigateToSymbol(symbol) {
         console.log(`Navigating to symbol: ${symbol}`);
         
-        // Try to change symbol without changing URL (using TradingView's API)
         try {
-            // Look for symbol search/input field
-            const symbolInputs = document.querySelectorAll('input[class*="symbol"], input[placeholder*="symbol"]');
-            for (const input of symbolInputs) {
-                input.value = symbol;
-                input.dispatchEvent(new Event('input', { bubbles: true }));
-                input.dispatchEvent(new Event('change', { bubbles: true }));
+            // Method 1: Click symbol button to open search dialog
+            const symbolButton = document.querySelector('.chart-container [data-name="symbol-button"], [data-role="button"][class*="symbol"]');
+            if (symbolButton) {
+                console.log('[DEBUG] Found symbol button, clicking to open search...');
+                symbolButton.click();
+                await this.sleep(500);
                 
-                // Press Enter
+                // Find the search input that appears
+                const searchInput = document.querySelector('input[placeholder*="Symbol"], input[placeholder*="Search"], input[data-role="search"]');
+                if (searchInput) {
+                    console.log('[DEBUG] Found search input, typing symbol:', symbol);
+                    searchInput.focus();
+                    searchInput.value = symbol;
+                    searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+                    await this.sleep(300);
+                    
+                    // Press Enter to select
+                    const enterEvent = new KeyboardEvent('keydown', {
+                        key: 'Enter',
+                        code: 'Enter',
+                        keyCode: 13,
+                        bubbles: true,
+                        cancelable: true
+                    });
+                    searchInput.dispatchEvent(enterEvent);
+                    await this.sleep(1000);
+                    return;
+                }
+            }
+            
+            // Method 2: Try direct symbol input fields
+            const symbolInputSelectors = [
+                'input[data-role="search"]',
+                'input[class*="symbol"]',
+                'input[placeholder*="symbol"]',
+                'input[placeholder*="Symbol"]',
+                '.symbol-input input',
+                '[class*="symbol-edit"] input'
+            ];
+            
+            for (const selector of symbolInputSelectors) {
+                const input = document.querySelector(selector);
+                if (input && this.isElementVisible(input)) {
+                    console.log(`[DEBUG] Found symbol input with selector: ${selector}`);
+                    input.focus();
+                    input.value = symbol;
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                    
+                    const enterEvent = new KeyboardEvent('keydown', {
+                        key: 'Enter',
+                        code: 'Enter',
+                        keyCode: 13,
+                        bubbles: true
+                    });
+                    input.dispatchEvent(enterEvent);
+                    await this.sleep(1000);
+                    return;
+                }
+            }
+            
+            // Method 3: Try keyboard shortcut to open symbol search (might be different per TradingView version)
+            console.log('[DEBUG] Trying keyboard shortcut for symbol search...');
+            document.dispatchEvent(new KeyboardEvent('keydown', {
+                key: 's',
+                code: 'KeyS',
+                ctrlKey: false,
+                altKey: false,
+                bubbles: true
+            }));
+            await this.sleep(500);
+            
+            const searchAfterShortcut = document.querySelector('input[data-role="search"], input[placeholder*="Symbol"]');
+            if (searchAfterShortcut) {
+                console.log('[DEBUG] Symbol search opened via shortcut');
+                searchAfterShortcut.focus();
+                searchAfterShortcut.value = symbol;
+                searchAfterShortcut.dispatchEvent(new Event('input', { bubbles: true }));
+                await this.sleep(300);
+                
                 const enterEvent = new KeyboardEvent('keydown', {
                     key: 'Enter',
                     code: 'Enter',
                     keyCode: 13,
                     bubbles: true
                 });
-                input.dispatchEvent(enterEvent);
-                
-                return; // Success
+                searchAfterShortcut.dispatchEvent(enterEvent);
+                await this.sleep(1000);
+                return;
             }
             
-            // Fallback: modify URL (though this might restart the extension)
-            console.warn('Could not find symbol input, URL change may be required');
+            console.warn('[DEBUG] Could not find symbol input after trying all methods');
+            console.warn('[DEBUG] Symbol may need to be changed manually or URL modification required');
             
         } catch (error) {
-            console.error('Error navigating to symbol:', error);
+            console.error('[DEBUG] Error navigating to symbol:', error);
         }
     }
     
@@ -867,26 +954,77 @@ class TVPineLogsExtractor {
         // First ensure Pine Logs is activated
         await this.activatePineLogsWidget();
         
-        // Look for replay button or mode
+        // Enhanced replay button search with more specific selectors
+        // Based on TradingView HTML reference structure
         const replaySelectors = [
+            // Specific replay bar button
             '[data-name="replay"]',
-            '[class*="replay"]',
+            'button[data-name="replay"]',
+            '[aria-label*="Replay"]',
+            '[aria-label*="replay"]',
+            
+            // Chart control buttons
+            '.chart-controls button[title*="Replay"]',
+            '.chart-controls button[title*="replay"]',
+            
+            // Toolbar replay buttons
+            '[class*="toolbar"] button[class*="replay"]',
+            'div[data-role="button"][title*="Replay"]',
+            
+            // Generic fallbacks
             'button[title*="replay"]',
             'button[title*="Replay"]',
-            '[data-test-id="replay-button"]'
+            '[class*="replay"][role="button"]',
+            '[data-test-id="replay-button"]',
+            
+            // SVG icon based (replay icons often use SVG)
+            'button:has(svg[class*="replay"])',
+            'button:has([class*="replay-icon"])'
         ];
         
         for (const selector of replaySelectors) {
-            const button = document.querySelector(selector);
-            if (button) {
-                console.log(`Found replay button: ${selector}`);
+            try {
+                const button = document.querySelector(selector);
+                if (button && this.isElementVisible(button)) {
+                    console.log(`[DEBUG] Found visible replay button with selector: ${selector}`);
+                    button.click();
+                    await this.sleep(2000);
+                    return;
+                }
+            } catch (e) {
+                // Skip invalid selectors
+                continue;
+            }
+        }
+        
+        // Try finding by text content
+        const allButtons = document.querySelectorAll('button, div[role="button"], [data-role="button"]');
+        for (const button of allButtons) {
+            const text = button.textContent?.toLowerCase() || '';
+            const title = button.getAttribute('title')?.toLowerCase() || '';
+            const ariaLabel = button.getAttribute('aria-label')?.toLowerCase() || '';
+            
+            if ((text.includes('replay') || title.includes('replay') || ariaLabel.includes('replay')) && 
+                this.isElementVisible(button)) {
+                console.log('[DEBUG] Found replay button by text/attribute search');
                 button.click();
                 await this.sleep(2000);
                 return;
             }
         }
         
-        console.warn('Replay mode button not found');
+        console.warn('[DEBUG] Replay mode button not found after exhaustive search');
+        console.warn('[DEBUG] User may need to activate replay mode manually');
+    }
+    
+    isElementVisible(element) {
+        if (!element) return false;
+        const style = window.getComputedStyle(element);
+        return style.display !== 'none' && 
+               style.visibility !== 'hidden' && 
+               style.opacity !== '0' &&
+               element.offsetWidth > 0 &&
+               element.offsetHeight > 0;
     }
     
     async activatePineLogsWidget() {
