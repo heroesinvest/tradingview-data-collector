@@ -1,0 +1,246 @@
+/* ============================================================================
+   CONTENT STYLES - Extension UI Overlay
+   ============================================================================ */
+
+/* Main extension overlay */
+.tv-data-collector-overlay {
+    position: fixed !important;
+    top: 20px !important;
+    right: 20px !important;
+    width: 350px !important;
+    max-height: 80vh !important;
+    background: #1e1e1e !important;
+    border: 2px solid #333 !important;
+    border-radius: 8px !important;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.7) !important;
+    z-index: 999999 !important;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+    color: #ffffff !important;
+    overflow: hidden !important;
+    resize: both !important;
+    min-width: 300px !important;
+    min-height: 400px !important;
+}
+
+/* Draggable header */
+.tv-data-collector-header {
+    background: #333 !important;
+    padding: 8px 12px !important;
+    cursor: move !important;
+    border-bottom: 1px solid #555 !important;
+    display: flex !important;
+    justify-content: space-between !important;
+    align-items: center !important;
+}
+
+.tv-data-collector-title {
+    font-size: 14px !important;
+    font-weight: bold !important;
+    color: #2196F3 !important;
+    margin: 0 !important;
+}
+
+.tv-data-collector-controls {
+    display: flex !important;
+    gap: 4px !important;
+}
+
+.tv-data-collector-btn {
+    background: #555 !important;
+    border: none !important;
+    color: #fff !important;
+    width: 20px !important;
+    height: 20px !important;
+    border-radius: 3px !important;
+    cursor: pointer !important;
+    font-size: 12px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+}
+
+.tv-data-collector-btn:hover {
+    background: #666 !important;
+}
+
+.tv-data-collector-btn.minimize {
+    background: #FF9800 !important;
+}
+
+.tv-data-collector-btn.close {
+    background: #f44336 !important;
+}
+
+/* Content area */
+.tv-data-collector-content {
+    padding: 16px !important;
+    max-height: calc(80vh - 40px) !important;
+    overflow-y: auto !important;
+}
+
+/* Status indicator */
+.tv-data-collector-status {
+    position: fixed !important;
+    top: 10px !important;
+    left: 50% !important;
+    transform: translateX(-50%) !important;
+    background: rgba(33, 150, 243, 0.9) !important;
+    color: white !important;
+    padding: 8px 16px !important;
+    border-radius: 20px !important;
+    font-size: 12px !important;
+    font-weight: bold !important;
+    z-index: 1000000 !important;
+    display: none !important;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3) !important;
+}
+
+.tv-data-collector-status.show {
+    display: block !important;
+}
+
+.tv-data-collector-status.success {
+    background: rgba(76, 175, 80, 0.9) !important;
+}
+
+.tv-data-collector-status.error {
+    background: rgba(244, 67, 54, 0.9) !important;
+}
+
+.tv-data-collector-status.warning {
+    background: rgba(255, 152, 0, 0.9) !important;
+}
+
+/* Progress bar overlay */
+.tv-data-collector-progress {
+    position: fixed !important;
+    bottom: 20px !important;
+    left: 20px !important;
+    right: 20px !important;
+    background: rgba(30, 30, 30, 0.95) !important;
+    border: 1px solid #555 !important;
+    border-radius: 6px !important;
+    padding: 12px !important;
+    z-index: 999998 !important;
+    display: none !important;
+}
+
+.tv-data-collector-progress.show {
+    display: block !important;
+}
+
+.tv-data-collector-progress-title {
+    color: #2196F3 !important;
+    font-size: 14px !important;
+    font-weight: bold !important;
+    margin-bottom: 8px !important;
+}
+
+.tv-data-collector-progress-bar {
+    width: 100% !important;
+    height: 6px !important;
+    background: #333 !important;
+    border-radius: 3px !important;
+    overflow: hidden !important;
+    margin-bottom: 8px !important;
+}
+
+.tv-data-collector-progress-fill {
+    height: 100% !important;
+    background: linear-gradient(90deg, #4CAF50, #2196F3) !important;
+    width: 0% !important;
+    transition: width 0.3s ease !important;
+}
+
+.tv-data-collector-progress-text {
+    color: #ccc !important;
+    font-size: 12px !important;
+}
+
+/* Minimized state */
+.tv-data-collector-overlay.minimized {
+    width: auto !important;
+    height: auto !important;
+    resize: none !important;
+}
+
+.tv-data-collector-overlay.minimized .tv-data-collector-content {
+    display: none !important;
+}
+
+/* Pulse animation for active collection */
+@keyframes tv-data-collector-pulse {
+    0% { opacity: 1; }
+    50% { opacity: 0.7; }
+    100% { opacity: 1; }
+}
+
+.tv-data-collector-overlay.collecting {
+    animation: tv-data-collector-pulse 2s infinite !important;
+}
+
+/* Pine Logs highlighting */
+.tv-data-collector-highlight {
+    background: rgba(33, 150, 243, 0.2) !important;
+    border: 2px solid #2196F3 !important;
+    box-shadow: 0 0 10px rgba(33, 150, 243, 0.5) !important;
+}
+
+/* Scrollbar styling for content */
+.tv-data-collector-content::-webkit-scrollbar {
+    width: 6px !important;
+}
+
+.tv-data-collector-content::-webkit-scrollbar-track {
+    background: #333 !important;
+    border-radius: 3px !important;
+}
+
+.tv-data-collector-content::-webkit-scrollbar-thumb {
+    background: #666 !important;
+    border-radius: 3px !important;
+}
+
+.tv-data-collector-content::-webkit-scrollbar-thumb:hover {
+    background: #777 !important;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .tv-data-collector-overlay {
+        width: 90vw !important;
+        max-width: 350px !important;
+        top: 10px !important;
+        right: 10px !important;
+    }
+    
+    .tv-data-collector-progress {
+        left: 10px !important;
+        right: 10px !important;
+        bottom: 10px !important;
+    }
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+    .tv-data-collector-overlay {
+        border-color: #fff !important;
+        background: #000 !important;
+    }
+    
+    .tv-data-collector-header {
+        background: #222 !important;
+        border-bottom-color: #fff !important;
+    }
+}
+
+/* Reduced motion support */
+@media (prefers-reduced-motion: reduce) {
+    .tv-data-collector-overlay.collecting {
+        animation: none !important;
+    }
+    
+    .tv-data-collector-progress-fill {
+        transition: none !important;
+    }
+}

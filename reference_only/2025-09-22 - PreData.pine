@@ -1,0 +1,301 @@
+//@version=6
+indicator("Heroes Pre-Data", shorttitle="Pre-Data", overlay=true)
+
+// Input parameters
+ema_length = input.int(20, title="EMA Length", minval=1)
+sma_length = input.int(200, title="SMA Length", minval=1)
+enable_alerts = input.bool(true, title="Enable Alerts")
+webhook_url = input.string("", title="Webhook URL (Optional)")
+
+// Date range filter for ALL logic (visuals, alerts, drawings)
+enable_date_filter = input.bool(false, title="Enable Date Filter")
+label_start_date = input.time(timestamp("01 Oct 2024 00:00"), title="Start Date")
+label_end_date = input.time(timestamp("31 Dec 2024 23:59"), title="End Date")
+
+// ATR-based Stop Loss and Take Profit parameters
+atr_period = input.int(200, title="ATR Period", minval=1)
+tp_multiplier = input.int(10, title="Take Profit ATR Multiplier", minval=1)
+show_sl_tp = input.bool(true, title="Show Stop Loss & Take Profit Lines")
+show_fib_levels = input.bool(false, title="Show Fibonacci ATR Levels")
+
+// Feature extraction parameters
+inp_use_atr_prev = input.bool(false, title="Use Previous Bar ATR for Extra Conservatism")
+inp_log_to_chart = input.bool(true, title="Show Payload Log on Chart")
+inp_emit_ohlc = input.bool(true, title="Include OHLCV Arrays in Payload")
+inp_N = input.int(100, title="OHLCV Array Length", minval=1, maxval=100)
+inp_pullback_lookback = input.int(20, title="Pullback Lookback Period", minval=1)
+
+// Visual display parameters
+show_labels = input.bool(true, title="Show Signal Labels")
+
+// Calculate moving averages
+ema20 = ta.ema(close, ema_length)
+sma200 = ta.sma(close, sma_length)
+
+// Calculate ATR for stop loss and take profit
+atr = ta.atr(atr_period)
+
+// Helper function for 3-decimal rounding
+round3(x) => math.round(x * 1000) / 1000.0
+
+// Helper function to build CSV string from array with round3
+build_csv(arr) =>
+    var string result = ""
+    result := ""
+    for i = 0 to array.size(arr) - 1
+        val = array.get(arr, i)
+        rounded_val = round3(val)
+        result := result + (i == 0 ? "" : ",") + str.tostring(rounded_val)
+    result
+
+// Helper function to build OHLCV arrays for last N bars (optimized)
+build_ohlcv_arrays(P_entry, ATR_entry) =>
+    // Pre-allocate arrays with exact size
+    var open_arr = array.new<float>(inp_N + 1)
+    var high_arr = array.new<float>(inp_N + 1)
+    var low_arr = array.new<float>(inp_N + 1)
+    var close_arr = array.new<float>(inp_N + 1)
+    
+    // Clear and resize arrays efficiently
+    array.clear(open_arr)
+    array.clear(high_arr)
+    array.clear(low_arr)
+    array.clear(close_arr)
+    
+    // Fill arrays in single loop (oldest to newest)
+    for i = inp_N to 0
+        array.push(open_arr, round3((open[i] - P_entry) / ATR_entry))
+        array.push(high_arr, round3((high[i] - P_entry) / ATR_entry))
+        array.push(low_arr, round3((low[i] - P_entry) / ATR_entry))
+        array.push(close_arr, round3((close[i] - P_entry) / ATR_entry))
+    
+    // Build CSV strings
+    [build_csv(open_arr), build_csv(high_arr), build_csv(low_arr), build_csv(close_arr)]
+
+// Plot moving averages
+//plot(ema20, color=color.blue, linewidth=2, title="EMA 20")
+//plot(sma200, color=color.red, linewidth=2, title="SMA 200")
+
+// SMA trend direction (shifted 1 bar forward: use previous closed bar)
+sma_up = close[1] > sma200[1]
+sma_down = close[1] < sma200[1]
+
+// EMA crossover detection - shifted to evaluate on [1]/[0]
+// For long: bar[1] below EMA20[1], bar[0] moving up; prevent immediate retrigger if bar[2] was also below
+ema_cross_up = close[1] < ema20[1] and close > close[1] and not(close[2] < ema20[2])
+// For short: bar[1] above EMA20[1], bar[0] moving down; prevent immediate retrigger if bar[2] was also above  
+ema_cross_down = close[1] > ema20[1] and close < close[1] and not(close[2] > ema20[2])
+
+// Track signal states to prevent frequent retriggering
+var bool last_signal_was_long = false
+var bool last_signal_was_short = false
+
+// Signal counters for logging
+var int total_signals = 0
+var int long_signals = 0
+var int short_signals = 0
+
+// Check for 3 consecutive closes in the required direction after signal
+// For sma_up: need 3 closes above EMA20 to reset long signal
+// For sma_down: need 3 closes below EMA20 to reset short signal
+three_closes_above_ema = close > ema20 and close[1] > ema20 and close[2] > ema20
+three_closes_below_ema = close < ema20 and close[1] < ema20 and close[2] < ema20
+
+// Reset signal states when required direction condition is met
+// Long signals reset when we get 3 closes above EMA20 (in sma_up direction)
+if last_signal_was_long and sma_up and three_closes_above_ema
+    last_signal_was_long := false
+// Short signals reset when we get 3 closes below EMA20 (in sma_down direction)  
+if last_signal_was_short and sma_down and three_closes_below_ema
+    last_signal_was_short := false
+
+// Entry conditions - only trigger on actual EMA20 crossover with trend confirmation and reset logic
+long_condition = sma_up and ema_cross_up and not last_signal_was_long
+short_condition = sma_down and ema_cross_down and not last_signal_was_short
+
+// Update signal states when conditions are met
+if long_condition
+    last_signal_was_long := true
+    long_signals := long_signals + 1
+    total_signals := total_signals + 1
+
+if short_condition
+    last_signal_was_short := true
+    short_signals := short_signals + 1
+    total_signals := total_signals + 1
+
+// Plot signals using labels that follow the price axis
+// Check if current bar is within the specified date range
+in_date_range = not enable_date_filter or (time >= label_start_date and time <= label_end_date)
+
+if show_labels and long_condition and in_date_range
+    label.new(bar_index, low - (high - low) * 0.1, text="LONG", style=label.style_label_up, color=color.green, textcolor=color.white, size=size.normal)
+
+if show_labels and short_condition and in_date_range
+    label.new(bar_index, high + (high - low) * 0.1, text="SHORT", style=label.style_label_down, color=color.red, textcolor=color.white, size=size.normal)
+
+// Draw ATR-based Stop Loss and Take Profit areas
+if show_sl_tp
+    // For Long signals
+    if long_condition and in_date_range
+        // Entry price is the close of the current candle (signal fires at bar close)
+        entry_price = close
+        // Stop Loss: 1 ATR below entry price
+        sl_long = entry_price - atr
+        // Take Profit: Multiple ATR above entry price
+        tp_long = entry_price + (atr * tp_multiplier)
+        
+        // Draw Stop Loss line (red line below candle) - starting from current candle
+        line.new(bar_index, sl_long, bar_index + 10, sl_long, color=color.red, width=2, style=line.style_solid)
+        
+        // Draw Take Profit line (green line above candle) - starting from current candle
+        line.new(bar_index, tp_long, bar_index + 10, tp_long, color=color.green, width=2, style=line.style_solid)
+    
+    // For Short signals
+    if short_condition and in_date_range
+        // Entry price is the close of the current candle (signal fires at bar close)
+        entry_price = close
+        // Stop Loss: 1 ATR above entry price
+        sl_short = entry_price + atr
+        // Take Profit: Multiple ATR below entry price
+        tp_short = entry_price - (atr * tp_multiplier)
+        
+        // Draw Stop Loss line (red line above candle) - starting from current candle
+        line.new(bar_index, sl_short, bar_index + 10, sl_short, color=color.red, width=2, style=line.style_solid)
+        
+        // Draw Take Profit line (green line below candle) - starting from current candle
+        line.new(bar_index, tp_short, bar_index + 10, tp_short, color=color.green, width=2, style=line.style_solid)
+
+// Draw Fibonacci ATR levels
+if show_fib_levels
+    // For Long signals
+    if long_condition and in_date_range
+        entry_price = close
+        // Draw horizontal lines for each ATR multiple from -1 to tp_multiplier
+        for i = -1 to tp_multiplier
+            level_price = entry_price + (atr * i)
+            level_color = i < 0 ? color.red : i == 0 ? color.blue : color.green
+            line.new(bar_index, level_price, bar_index + 20, level_price, color=level_color, width=1, style=line.style_dashed)
+            label.new(bar_index + 20, level_price, text=str.tostring(i), style=label.style_label_left, color=color.white, textcolor=level_color, size=size.small)
+    
+    // For Short signals  
+    if short_condition and in_date_range
+        entry_price = close
+        // Draw horizontal lines for each ATR multiple from -1 to tp_multiplier
+        for i = -1 to tp_multiplier
+            level_price = entry_price - (atr * i)
+            level_color = i < 0 ? color.red : i == 0 ? color.blue : color.green
+            line.new(bar_index, level_price, bar_index + 20, level_price, color=level_color, width=1, style=line.style_dashed)
+            label.new(bar_index + 20, level_price, text=str.tostring(i), style=label.style_label_left, color=color.white, textcolor=level_color, size=size.small)
+
+// Prepare webhook payload
+get_webhook_payload(signal_type, entry_price, timestamp) =>
+    payload = '{\n  "timestamp": "' + str.tostring(timestamp) + '",\n  "symbol": "' + syminfo.ticker + '",\n  "price": ' + str.tostring(entry_price) + ',\n  "sma_trend": "' + (sma_up ? "UP" : sma_down ? "DOWN" : "SIDEWAYS") + '",\n  "signal": "' + signal_type + '"\n}'
+    payload
+
+// Comprehensive feature extraction function - computes all normalized features at signal confirmation
+compute_basic_features(signal_side) =>
+    // Cache frequently used values
+    P_entry = close
+    ATR_entry = inp_use_atr_prev ? ta.atr(atr_period)[1] : ta.atr(atr_period)
+    ema20_val = ema20  // Use already calculated value
+    sma200_val = sma200  // Use already calculated value
+    
+    // Guard against invalid ATR
+    if ATR_entry <= 0
+        [na, na]
+    else
+        // Pre-calculate common divisors
+        atr_inv = 1.0 / ATR_entry
+        
+        // === DISTANCES & REGIME (normalized by ATR) ===
+        sma200_distance = round3((P_entry - sma200_val) * atr_inv)
+        ema20_distance = round3((P_entry - ema20_val) * atr_inv)
+        ema_sma_spread = round3((ema20_val - sma200_val) * atr_inv)
+        atr_percentage = round3(ATR_entry / P_entry)
+        
+        // === SLOPES (optimized calculations) ===
+        ema20_slope_5bar = round3((ema20_val - ta.ema(close, ema_length)[5]) / (5 * ATR_entry))
+        sma200_slope_20bar = round3((sma200_val - ta.sma(close, sma_length)[20]) / (20 * ATR_entry))
+        
+        // === MOMENTUM (k-bar returns) ===
+        return_5bar = round3((P_entry - close[5]) * atr_inv)
+        return_20bar = round3((P_entry - close[20]) * atr_inv)
+        return_50bar = round3((P_entry - close[50]) * atr_inv)
+        
+        // === ENTRY BAR SHAPE ===
+        bar_range = round3((high - low) * atr_inv)
+        bar_body = round3((P_entry - open) * atr_inv)
+        high_close_open = math.max(open, P_entry)
+        low_close_open = math.min(open, P_entry)
+        upper_wick = round3((high - high_close_open) * atr_inv)
+        lower_wick = round3((low_close_open - low) * atr_inv)
+        
+        // === VOLUME (level and abnormality) ===
+        vol_sma = ta.sma(volume, 20)
+        volume_ratio = round3(volume / vol_sma)
+        vol_stdev = ta.stdev(volume, 20)
+        volume_zscore = vol_stdev > 0 ? round3((volume - vol_sma) / vol_stdev) : 0.0
+        
+        // === PULLBACK DEPTH ===
+        pullback_up = round3((ema20_val - ta.lowest(low, inp_pullback_lookback)) * atr_inv)
+        pullback_down = round3((ta.highest(high, inp_pullback_lookback) - ema20_val) * atr_inv)
+        
+        // Build OHLCV block only if needed (optimized single call)
+        ohlcv_block = ""
+        if inp_emit_ohlc
+            [o_csv, h_csv, l_csv, c_csv] = build_ohlcv_arrays(P_entry, ATR_entry)
+            ohlcv_block := ',"ohlc_normalized":{"open":[' + o_csv + '],"high":[' + h_csv + '],"low":[' + l_csv + '],"close":[' + c_csv + ']}'
+        
+        // Build JSON payload efficiently (single concatenation)
+        json_payload = '{"symbol":"' + syminfo.ticker + 
+                      '","timeframe":"' + timeframe.period + 
+                      '","signal_side":"' + signal_side + 
+                      '","atr_percentage":' + str.tostring(atr_percentage) + 
+                      ',"sma200_distance":' + str.tostring(sma200_distance) + 
+                      ',"ema20_distance":' + str.tostring(ema20_distance) + 
+                      ',"ema_sma_spread":' + str.tostring(ema_sma_spread) + 
+                      ',"ema20_slope_5bar":' + str.tostring(ema20_slope_5bar) + 
+                      ',"sma200_slope_20bar":' + str.tostring(sma200_slope_20bar) + 
+                      ',"return_5bar":' + str.tostring(return_5bar) + 
+                      ',"return_20bar":' + str.tostring(return_20bar) + 
+                      ',"return_50bar":' + str.tostring(return_50bar) + 
+                      ',"bar_range":' + str.tostring(bar_range) + 
+                      ',"bar_body":' + str.tostring(bar_body) + 
+                      ',"upper_wick":' + str.tostring(upper_wick) + 
+                      ',"lower_wick":' + str.tostring(lower_wick) + 
+                      ',"volume_ratio":' + str.tostring(volume_ratio) + 
+                      ',"volume_zscore":' + str.tostring(volume_zscore) + 
+                      ',"pullback_up":' + str.tostring(pullback_up) + 
+                      ',"pullback_down":' + str.tostring(pullback_down) + 
+                      ohlcv_block + '}'
+        
+        [json_payload, ATR_entry]
+
+// Variable to store latest payload for chart display
+var string latest_payload = ""
+
+// Alert conditions and messages (fixed - compute features only when signal occurs)
+if long_condition and enable_alerts and in_date_range and barstate.isconfirmed
+    [json_payload, atr_val] = compute_basic_features("long")
+    if json_payload != "" and atr_val > 0
+        log.info(json_payload)
+        latest_payload := json_payload
+        alert(json_payload, alert.freq_once_per_bar)
+
+if short_condition and enable_alerts and in_date_range and barstate.isconfirmed
+    [json_payload, atr_val] = compute_basic_features("short")
+    if json_payload != "" and atr_val > 0
+        log.info(json_payload)
+        latest_payload := json_payload
+        alert(json_payload, alert.freq_once_per_bar)
+
+// // Table to display current status (last 3 rows only)
+// if barstate.islast
+//     var table status_table = table.new(position.top_right, 2, 3, bgcolor=color.white, border_width=1)
+//     table.cell(status_table, 0, 0, "Total Signals", text_color=color.black, text_size=size.small)
+//     table.cell(status_table, 1, 0, str.tostring(total_signals), text_color=color.purple, text_size=size.small)
+//     table.cell(status_table, 0, 1, "Long Signals", text_color=color.black, text_size=size.small)
+//     table.cell(status_table, 1, 1, str.tostring(long_signals), text_color=color.green, text_size=size.small)
+//     table.cell(status_table, 0, 2, "Short Signals", text_color=color.black, text_size=size.small)
+//     table.cell(status_table, 1, 2, str.tostring(short_signals), text_color=color.red, text_size=size.small)

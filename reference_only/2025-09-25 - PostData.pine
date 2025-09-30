@@ -1,0 +1,451 @@
+//@version=6
+indicator("Post Trade Data", shorttitle="Post Trade", overlay=true, max_bars_back=5000)
+
+// === MODIFIED FOR OVERLAPPING OPERATIONS ===
+// Changed to allow multiple simultaneous trades like PreData
+// - Removed blocking of new entries when trades are active
+// - Uses same reset logic as PreData (3 consecutive closes)
+// - Maintains individual trade tracking for MFE/MAE analysis
+// - Signal counting now matches PreData behavior
+
+// Input parameters
+ema_length = input.int(20, title="EMA Length", minval=1)
+sma_length = input.int(200, title="SMA Length", minval=1)
+enable_alerts = input.bool(true, title="Enable Alerts")
+
+// Date range parameters
+use_date_range = input.bool(true, title="Use Date Range Filter")
+start_date = input.time(timestamp("01 Jan 2023 00:00"), title="Start Date")
+end_date = input.time(timestamp("31 Dec 2024 23:59"), title="End Date")
+
+// ATR and MFE parameters
+atr_period = input.int(200, title="ATR Period", minval=1)
+stop_atr = input.float(-1.0, title="Stop Loss (ATR)", step=0.1)
+target_atr = input.float(10.0, title="Take Profit (ATR)", step=0.1)
+max_lookforward = input.int(500, title="Max Bars Forward", minval=50, maxval=1000)
+
+// Display options
+show_signals = input.bool(false, title="Show Entry Signals")
+show_levels = input.bool(false, title="Show Target/Stop Lines")
+show_status_table = input.bool(false, title="Show Status Table")
+show_mfe_table = input.bool(false, title="Show Latest Analysis Table")
+log_to_chart = input.bool(true, title="Log to Chart")
+
+// === Time formatting helpers (UTC ISO 8601) & de-duplication ===
+fmt_iso_utc(t) =>
+    // Returns ISO 8601 like 2024-07-01T13:45:00.000Z in UTC
+    str.replace(str.format_time(t, "yyyy-MM-dd HH:mm:ss", "UTC"), " ", "T") + ".000Z"
+
+make_entry_key(sym, tf, t, side) =>
+    sym + "|" + tf + "|" + fmt_iso_utc(t) + "|" + side
+
+var string __last_entry_key = ""
+var array<string> __recent_keys = array.new<string>()  // optional buffer for extra safety
+__remember_key(k) =>
+    array.push(__recent_keys, k)
+    // keep only last 100 keys
+    if array.size(__recent_keys) > 100
+        array.shift(__recent_keys)
+
+__is_new_key(k) =>
+    // fast check against last key
+    if k == __last_entry_key
+        false
+    else
+        // optional linear scan over small buffer to avoid accidental duplicates
+        is_dup = false
+        for i = 0 to array.size(__recent_keys) - 1
+            if array.get(__recent_keys, i) == k
+                is_dup := true
+        not is_dup
+
+// Calculate indicators
+ema20 = ta.ema(close, ema_length)
+sma200 = ta.sma(close, sma_length)
+atr200 = ta.atr(atr_period)
+
+// Helper functions
+round3(x) => math.round(x * 1000) / 1000.0
+
+// Signal detection logic (aligned with PreData triggers)
+sma_trend_up = close[1] > sma200[1]
+sma_trend_down = close[1] < sma200[1]
+
+ema_cross_up = close[1] < ema20[1] and close > close[1] and not(close[2] < ema20[2])
+ema_cross_down = close[1] > ema20[1] and close < close[1] and not(close[2] > ema20[2])
+
+// Signal state management - Modified for overlapping operations
+var bool last_long_reset = false
+var bool last_short_reset = false
+var int signal_count = 0
+
+// Reset conditions
+three_closes_above = close > ema20 and close[1] > ema20 and close[2] > ema20
+three_closes_below = close < ema20 and close[1] < ema20 and close[2] < ema20
+
+// Manage reset flags
+if sma_trend_up and three_closes_above
+    last_long_reset := true
+if sma_trend_down and three_closes_below
+    last_short_reset := true
+
+// Clear reset flags when we're no longer in the 3-closes condition
+if not three_closes_above
+    last_long_reset := false
+if not three_closes_below
+    last_short_reset := false
+
+// Entry conditions - Align with PreData (no date gating here)
+in_date_range = not use_date_range or (time >= start_date and time <= end_date)
+
+// Allow new signals after reset has occurred and crossover happens
+// Align with PreData: do NOT gate the raw entry condition by date range.
+// Date range will only gate *logging/recording* (not the internal state machine).
+long_signal = sma_trend_up and ema_cross_up and not last_signal_was_long
+short_signal = sma_trend_down and ema_cross_down and not last_signal_was_short
+
+// Additional variables to track last signal type and prevent immediate re-entry
+var bool last_signal_was_long = false
+var bool last_signal_was_short = false
+
+// Reset signal states after 3 closes (matching PreData behavior)
+if last_signal_was_long and sma_trend_up and three_closes_above
+    last_signal_was_long := false
+if last_signal_was_short and sma_trend_down and three_closes_below
+    last_signal_was_short := false
+
+// === Entry event: gate on confirmed bar & anti-duplicate key ===
+if barstate.isconfirmed
+    // Determine if we have a new signal on this just-closed bar
+    _has_signal = long_signal or short_signal
+    if _has_signal
+        signal_type = long_signal ? "long" : "short"
+        _key = make_entry_key(syminfo.tickerid, timeframe.period, time, signal_type)
+        if __is_new_key(_key)
+            __last_entry_key := _key
+            __remember_key(_key)
+            // Update states (match PreData "one-shot" semantics)
+            if long_signal
+                last_signal_was_long := true
+                signal_count := signal_count + 1
+            if short_signal
+                last_signal_was_short := true
+                signal_count := signal_count + 1
+
+            // Only record/emit when the bar is in the configured date range (matches PreData behavior)
+            if in_date_range
+                // Add new signals to active tracking
+                entry_price = close
+                entry_atr = atr200  // Capture ATR at entry bar
+                is_long_pos = long_signal
+                add_active_trade(entry_price, entry_atr, is_long_pos, signal_count)
+
+                // Entry JSON (minimal) for external sync (ISO-UTC)
+                entry_json = "{" + '"event":"entry",' + '"key":"' + _key + '",' + '"symbol":"' + syminfo.ticker + '",' + '"timeframe":"' + timeframe.period + '",' + '"side":"' + (long_signal ? "long" : "short") + '",' + '"entry_price":' + str.tostring(entry_price) + '}'
+
+                if enable_alerts
+                    log.info(entry_json)
+                    alert(entry_json, alert.freq_once_per_bar)
+
+// Progressive tracking arrays - store active trades for real-time monitoring
+var array<float> active_entry_prices = array.new<float>()
+var array<float> active_entry_atrs = array.new<float>()
+var array<bool> active_is_long = array.new<bool>()
+var array<int> active_signal_numbers = array.new<int>()
+var array<int> active_entry_times = array.new<int>()
+var array<int> active_entry_bar_indices = array.new<int>()
+var array<float> active_best_mfe = array.new<float>()
+var array<float> active_worst_mae = array.new<float>()
+var array<int> active_max_positive_atr_bars = array.new<int>()
+var array<int> active_max_negative_atr_bars = array.new<int>()
+var array<bool> active_hit_neg1 = array.new<bool>()
+var array<bool> active_hit_pos1 = array.new<bool>()
+var array<bool> active_hit_pos2 = array.new<bool>()
+var array<bool> active_hit_pos3 = array.new<bool>()
+var array<bool> active_hit_pos4 = array.new<bool>()
+var array<bool> active_hit_pos5 = array.new<bool>()
+var array<bool> active_hit_pos6 = array.new<bool>()
+var array<bool> active_hit_pos7 = array.new<bool>()
+var array<bool> active_hit_pos8 = array.new<bool>()
+var array<bool> active_hit_pos9 = array.new<bool>()
+var array<bool> active_hit_pos10 = array.new<bool>()
+var array<int> active_neg1_bars = array.new<int>()
+var array<int> active_pos1_bars = array.new<int>()
+var array<int> active_pos2_bars = array.new<int>()
+var array<int> active_pos3_bars = array.new<int>()
+var array<int> active_pos4_bars = array.new<int>()
+var array<int> active_pos5_bars = array.new<int>()
+var array<int> active_pos6_bars = array.new<int>()
+var array<int> active_pos7_bars = array.new<int>()
+var array<int> active_pos8_bars = array.new<int>()
+var array<int> active_pos9_bars = array.new<int>()
+var array<int> active_pos10_bars = array.new<int>()
+
+// Function to add new trade to active tracking
+add_active_trade(entry_price, entry_atr, is_long, signal_num) =>
+    array.push(active_entry_prices, entry_price)
+    array.push(active_entry_atrs, entry_atr)
+    array.push(active_is_long, is_long)
+    array.push(active_signal_numbers, signal_num)
+    array.push(active_entry_times, time)
+    array.push(active_entry_bar_indices, bar_index)
+    array.push(active_best_mfe, 0.0)
+    array.push(active_worst_mae, 0.0)
+    array.push(active_max_positive_atr_bars, 0)
+    array.push(active_max_negative_atr_bars, 0)
+    array.push(active_hit_neg1, false)
+    array.push(active_hit_pos1, false)
+    array.push(active_hit_pos2, false)
+    array.push(active_hit_pos3, false)
+    array.push(active_hit_pos4, false)
+    array.push(active_hit_pos5, false)
+    array.push(active_hit_pos6, false)
+    array.push(active_hit_pos7, false)
+    array.push(active_hit_pos8, false)
+    array.push(active_hit_pos9, false)
+    array.push(active_hit_pos10, false)
+    array.push(active_neg1_bars, na)
+    array.push(active_pos1_bars, na)
+    array.push(active_pos2_bars, na)
+    array.push(active_pos3_bars, na)
+    array.push(active_pos4_bars, na)
+    array.push(active_pos5_bars, na)
+    array.push(active_pos6_bars, na)
+    array.push(active_pos7_bars, na)
+    array.push(active_pos8_bars, na)
+    array.push(active_pos9_bars, na)
+    array.push(active_pos10_bars, na)
+
+// Function to update MFE/MAE for active trades and finalize completed ones
+update_active_trades() =>
+    var array<string> completed_trades = array.new<string>()
+    for i = array.size(active_entry_prices) - 1 to 0
+        entry_price = array.get(active_entry_prices, i)
+        entry_atr = array.get(active_entry_atrs, i)
+        is_long_pos = array.get(active_is_long, i)
+        signal_num = array.get(active_signal_numbers, i)
+        entry_time = array.get(active_entry_times, i)
+        entry_index = array.get(active_entry_bar_indices, i)
+        best_mfe = array.get(active_best_mfe, i)
+        worst_mae = array.get(active_worst_mae, i)
+        pos_atr_bars = array.get(active_max_positive_atr_bars, i)
+        neg_atr_bars = array.get(active_max_negative_atr_bars, i)
+        hit_neg1 = array.get(active_hit_neg1, i)
+        hit_pos1 = array.get(active_hit_pos1, i)
+        hit_pos2 = array.get(active_hit_pos2, i)
+        hit_pos3 = array.get(active_hit_pos3, i)
+        hit_pos4 = array.get(active_hit_pos4, i)
+        hit_pos5 = array.get(active_hit_pos5, i)
+        hit_pos6 = array.get(active_hit_pos6, i)
+        hit_pos7 = array.get(active_hit_pos7, i)
+        hit_pos8 = array.get(active_hit_pos8, i)
+        hit_pos9 = array.get(active_hit_pos9, i)
+        hit_pos10 = array.get(active_hit_pos10, i)
+        neg1_bar = array.get(active_neg1_bars, i)
+        pos1_bar = array.get(active_pos1_bars, i)
+        pos2_bar = array.get(active_pos2_bars, i)
+        pos3_bar = array.get(active_pos3_bars, i)
+        pos4_bar = array.get(active_pos4_bars, i)
+        pos5_bar = array.get(active_pos5_bars, i)
+        pos6_bar = array.get(active_pos6_bars, i)
+        pos7_bar = array.get(active_pos7_bars, i)
+        pos8_bar = array.get(active_pos8_bars, i)
+        pos9_bar = array.get(active_pos9_bars, i)
+        pos10_bar = array.get(active_pos10_bars, i)
+
+        // Compute current ATR-based move
+        move_atr = (close - entry_price) / entry_atr
+        move_atr_abs = math.abs(move_atr)
+
+        // Update MFE/MAE and bar counts
+        best_mfe := math.max(best_mfe, move_atr)
+        worst_mae := math.min(worst_mae, move_atr)
+
+        if move_atr > 0
+            pos_atr_bars := pos_atr_bars + 1
+        if move_atr < 0
+            neg_atr_bars := neg_atr_bars + 1
+
+        // Track first time each ATR level is hit
+        if not hit_neg1 and move_atr <= stop_atr
+            hit_neg1 := true
+            neg1_bar := bar_index
+        if not hit_pos1 and move_atr >= 1
+            hit_pos1 := true
+            pos1_bar := bar_index
+        if not hit_pos2 and move_atr >= 2
+            hit_pos2 := true
+            pos2_bar := bar_index
+        if not hit_pos3 and move_atr >= 3
+            hit_pos3 := true
+            pos3_bar := bar_index
+        if not hit_pos4 and move_atr >= 4
+            hit_pos4 := true
+            pos4_bar := bar_index
+        if not hit_pos5 and move_atr >= 5
+            hit_pos5 := true
+            pos5_bar := bar_index
+        if not hit_pos6 and move_atr >= 6
+            hit_pos6 := true
+            pos6_bar := bar_index
+        if not hit_pos7 and move_atr >= 7
+            hit_pos7 := true
+            pos7_bar := bar_index
+        if not hit_pos8 and move_atr >= 8
+            hit_pos8 := true
+            pos8_bar := bar_index
+        if not hit_pos9 and move_atr >= 9
+            hit_pos9 := true
+            pos9_bar := bar_index
+        if not hit_pos10 and move_atr >= 10
+            hit_pos10 := true
+            pos10_bar := bar_index
+
+        // Save updated values
+        array.set(active_best_mfe, i, best_mfe)
+        array.set(active_worst_mae, i, worst_mae)
+        array.set(active_max_positive_atr_bars, i, pos_atr_bars)
+        array.set(active_max_negative_atr_bars, i, neg_atr_bars)
+        array.set(active_hit_neg1, i, hit_neg1)
+        array.set(active_hit_pos1, i, hit_pos1)
+        array.set(active_hit_pos2, i, hit_pos2)
+        array.set(active_hit_pos3, i, hit_pos3)
+        array.set(active_hit_pos4, i, hit_pos4)
+        array.set(active_hit_pos5, i, hit_pos5)
+        array.set(active_hit_pos6, i, hit_pos6)
+        array.set(active_hit_pos7, i, hit_pos7)
+        array.set(active_hit_pos8, i, hit_pos8)
+        array.set(active_hit_pos9, i, hit_pos9)
+        array.set(active_hit_pos10, i, hit_pos10)
+        array.set(active_neg1_bars, i, neg1_bar)
+        array.set(active_pos1_bars, i, pos1_bar)
+        array.set(active_pos2_bars, i, pos2_bar)
+        array.set(active_pos3_bars, i, pos3_bar)
+        array.set(active_pos4_bars, i, pos4_bar)
+        array.set(active_pos5_bars, i, pos5_bar)
+        array.set(active_pos6_bars, i, pos6_bar)
+        array.set(active_pos7_bars, i, pos7_bar)
+        array.set(active_pos8_bars, i, pos8_bar)
+        array.set(active_pos9_bars, i, pos9_bar)
+        array.set(active_pos10_bars, i, pos10_bar)
+
+        // Completion logic: either +10 ATR or <= -1 ATR or time-based stop
+        completed = false
+        positive_target_reached = best_mfe >= target_atr
+        negative_stop_reached = worst_mae <= stop_atr
+        time_exhausted = (bar_index - entry_index) >= max_lookforward
+
+        if positive_target_reached or negative_stop_reached or time_exhausted
+            completed := true
+
+        if completed and in_date_range
+            // Determine outcome and first-hit-before logic
+            outcome = positive_target_reached ? "positive" : (negative_stop_reached ? "negative" : "neutral")
+            reached_order = na
+            if hit_pos4 and not hit_neg1
+                reached_order := 1
+            else if hit_neg1 and not hit_pos4
+                reached_order := -1
+            else
+                reached_order := 0
+
+            // Build ATR levels JSON
+            atr_levels_json = '"atr_levels_bars":{' + '"neg1ATR":' + (hit_neg1 ? str.tostring(neg1_bar - entry_index) : 'null') + ',' +
+                              '"pos1ATR":' + (hit_pos1 ? str.tostring(pos1_bar - entry_index) : 'null') + ',' +
+                              '"pos2ATR":' + (hit_pos2 ? str.tostring(pos2_bar - entry_index) : 'null') + ',' +
+                              '"pos3ATR":' + (hit_pos3 ? str.tostring(pos3_bar - entry_index) : 'null') + ',' +
+                              '"pos4ATR":' + (hit_pos4 ? str.tostring(pos4_bar - entry_index) : 'null') + ',' +
+                              '"pos5ATR":' + (hit_pos5 ? str.tostring(pos5_bar - entry_index) : 'null') + ',' +
+                              '"pos6ATR":' + (hit_pos6 ? str.tostring(pos6_bar - entry_index) : 'null') + ',' +
+                              '"pos7ATR":' + (hit_pos7 ? str.tostring(pos7_bar - entry_index) : 'null') + ',' +
+                              '"pos8ATR":' + (hit_pos8 ? str.tostring(pos8_bar - entry_index) : 'null') + ',' +
+                              '"pos9ATR":' + (hit_pos9 ? str.tostring(pos9_bar - entry_index) : 'null') + ',' +
+                              '"pos10ATR":' + (hit_pos10 ? str.tostring(pos10_bar - entry_index) : 'null') + '}'
+
+            // Build complete JSON payload (using signal_side for consistency with PreData)
+            entry_datetime_formatted = fmt_iso_utc(entry_time)
+            exit_datetime_formatted = fmt_iso_utc(time)
+            json_data = "{" + '"symbol":"' + syminfo.ticker + '",' + '"timeframe":"' + timeframe.period + '",' +
+                        '"entry_datetime":"' + entry_datetime_formatted + '",' + '"exit_datetime":"' + exit_datetime_formatted + '",' +
+                        '"direction":"' + (is_long_pos ? "long" : "short") + '",' + '"entry_price":' + str.tostring(entry_price) + ',' +
+                        '"outcome":"' + outcome + '",' + '"mfe":' + str.tostring(best_mfe) + ',' + '"mae":' + str.tostring(worst_mae) + ',' +
+                        '"first_reach_order":' + str.tostring(reached_order) + ',' + '"pos_atr_bars":' + str.tostring(pos_atr_bars) + ',' + '"neg_atr_bars":' + str.tostring(neg_atr_bars) + ',' +
+                        atr_levels_json + ',' + '"signal_number":' + str.tostring(signal_num) + "}"
+
+            array.push(completed_trades, json_data)
+
+            // Remove from active arrays
+            array.remove(active_entry_prices, i)
+            array.remove(active_entry_atrs, i)
+            array.remove(active_is_long, i)
+            array.remove(active_signal_numbers, i)
+            array.remove(active_entry_times, i)
+            array.remove(active_entry_bar_indices, i)
+            array.remove(active_best_mfe, i)
+            array.remove(active_worst_mae, i)
+            array.remove(active_max_positive_atr_bars, i)
+            array.remove(active_max_negative_atr_bars, i)
+            array.remove(active_hit_neg1, i)
+            array.remove(active_hit_pos1, i)
+            array.remove(active_hit_pos2, i)
+            array.remove(active_hit_pos3, i)
+            array.remove(active_hit_pos4, i)
+            array.remove(active_hit_pos5, i)
+            array.remove(active_hit_pos6, i)
+            array.remove(active_hit_pos7, i)
+            array.remove(active_hit_pos8, i)
+            array.remove(active_hit_pos9, i)
+            array.remove(active_hit_pos10, i)
+            array.remove(active_neg1_bars, i)
+            array.remove(active_pos1_bars, i)
+            array.remove(active_pos2_bars, i)
+            array.remove(active_pos3_bars, i)
+            array.remove(active_pos4_bars, i)
+            array.remove(active_pos5_bars, i)
+            array.remove(active_pos6_bars, i)
+            array.remove(active_pos7_bars, i)
+            array.remove(active_pos8_bars, i)
+            array.remove(active_pos9_bars, i)
+            array.remove(active_pos10_bars, i)
+
+    // Emit completed trades once per bar
+    if barstate.isconfirmed
+        // Concatenate and emit all completed in this bar
+        for i = 0 to array.size(completed_trades) - 1
+            completed_json = array.get(completed_trades, i)
+            if enable_alerts
+                log.info(completed_json)
+                alert(completed_json, alert.freq_once_per_bar)
+
+// Update active trades every bar
+update_active_trades()
+
+// Visual elements
+if show_signals
+    if long_signal
+        label.new(bar_index, low - (high - low) * 0.15, text="LONG\n#" + str.tostring(signal_count), style=label.style_label_up, color=color.green, textcolor=color.white, size=size.normal)
+    if short_signal
+        label.new(bar_index, high + (high - low) * 0.15, text="SHORT\n#" + str.tostring(signal_count), style=label.style_label_down, color=color.red, textcolor=color.white, size=size.normal)
+
+// Draw target/stop levels
+if show_levels and (long_signal or short_signal)
+    entry_price = close
+    entry_atr_val = atr200
+    if long_signal
+        target_price = entry_price + (entry_atr_val * target_atr)
+        stop_price = entry_price + (entry_atr_val * stop_atr)
+        line.new(bar_index, target_price, bar_index + 50, target_price, color=color.green, width=2, style=line.style_dashed)
+        line.new(bar_index, stop_price, bar_index + 50, stop_price, color=color.red, width=2, style=line.style_dashed)
+    if short_signal
+        target_price = entry_price - (entry_atr_val * target_atr)
+        stop_price = entry_price - (entry_atr_val * stop_atr)
+        line.new(bar_index, target_price, bar_index + 50, target_price, color=color.green, width=2, style=line.style_dashed)
+        line.new(bar_index, stop_price, bar_index + 50, stop_price, color=color.red, width=2, style=line.style_dashed)
+
+// Optional status table
+if show_status_table and barstate.islast
+    var table status_table = table.new(position.top_right, 2, 2, border_width=1)
+    table.cell(status_table, 0, 0, "Signals", text_color=color.black, text_size=size.small)
+    table.cell(status_table, 1, 0, str.tostring(signal_count), text_color=color.purple, text_size=size.small)
+    table.cell(status_table, 0, 1, "Date Range", text_color=color.black, text_size=size.small)
+    table.cell(status_table, 1, 1, str.format_time(start_date, "yyyy-MM-dd", "GMT") + " → " + str.format_time(end_date, "yyyy-MM-dd", "GMT"), text_color=color.blue, text_size=size.tiny)

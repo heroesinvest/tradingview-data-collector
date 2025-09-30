@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        body {
+            width: 400px;
+            min-height: 600px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 16px;
+            background: #1e1e1e;
+            color: #ffffff;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #333;
+        }
+        
+        .header h1 {
+            margin: 0;
+            font-size: 18px;
+            color: #2196F3;
+        }
+        
+        .section {
+            margin-bottom: 20px;
+            padding: 12px;
+            background: #2d2d2d;
+            border-radius: 6px;
+            border: 1px solid #404040;
+        }
+        
+        .section-title {
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: #4CAF50;
+            font-size: 14px;
+        }
+        
+        .input-group {
+            margin-bottom: 12px;
+        }
+        
+        .input-group label {
+            display: block;
+            margin-bottom: 4px;
+            font-size: 12px;
+            color: #ccc;
+        }
+        
+        .input-group input[type="file"],
+        .input-group input[type="date"],
+        .input-group input[type="text"] {
+            width: 100%;
+            padding: 6px 8px;
+            border: 1px solid #555;
+            background: #333;
+            color: #fff;
+            border-radius: 4px;
+            font-size: 12px;
+            box-sizing: border-box;
+        }
+        
+        .input-group input[type="file"]::-webkit-file-upload-button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 4px 8px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 11px;
+        }
+        
+        .display-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+        
+        .display-item {
+            background: #333;
+            padding: 8px;
+            border-radius: 4px;
+            text-align: center;
+        }
+        
+        .display-label {
+            font-size: 10px;
+            color: #aaa;
+            margin-bottom: 2px;
+        }
+        
+        .display-value {
+            font-size: 14px;
+            font-weight: bold;
+            color: #2196F3;
+        }
+        
+        .timer {
+            color: #FF9800;
+        }
+        
+        .control-buttons {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+        
+        .btn {
+            padding: 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: bold;
+            transition: background-color 0.2s;
+        }
+        
+        .btn-primary {
+            background: #4CAF50;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #45a049;
+        }
+        
+        .btn-secondary {
+            background: #f44336;
+            color: white;
+        }
+        
+        .btn-secondary:hover {
+            background: #da190b;
+        }
+        
+        .btn:disabled {
+            background: #666;
+            cursor: not-allowed;
+        }
+        
+        .status-messages {
+            max-height: 120px;
+            overflow-y: auto;
+            background: #1a1a1a;
+            border: 1px solid #444;
+            border-radius: 4px;
+            padding: 8px;
+        }
+        
+        .status-message {
+            font-size: 11px;
+            margin-bottom: 4px;
+            padding: 2px 0;
+            border-bottom: 1px solid #333;
+        }
+        
+        .status-message:last-child {
+            border-bottom: none;
+        }
+        
+        .status-info {
+            color: #2196F3;
+        }
+        
+        .status-success {
+            color: #4CAF50;
+        }
+        
+        .status-warning {
+            color: #FF9800;
+        }
+        
+        .status-error {
+            color: #f44336;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 6px;
+            background: #333;
+            border-radius: 3px;
+            overflow: hidden;
+            margin: 8px 0;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #4CAF50, #2196F3);
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+        
+        .floating-controls {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            z-index: 10000;
+            background: #1e1e1e;
+            border: 1px solid #555;
+            border-radius: 6px;
+            padding: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+        }
+        
+        .minimize-btn {
+            background: #FF9800;
+            color: white;
+            border: none;
+            width: 20px;
+            height: 20px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 10px;
+            margin-left: 4px;
+        }
+        
+        .drag-handle {
+            width: 100%;
+            height: 20px;
+            background: #333;
+            cursor: move;
+            border-radius: 4px 4px 0 0;
+            margin: -16px -16px 16px -16px;
+            padding: 4px;
+            text-align: center;
+            font-size: 10px;
+            color: #aaa;
+        }
+        
+        .resize-handle {
+            position: absolute;
+            bottom: 0;
+            right: 0;
+            width: 20px;
+            height: 20px;
+            cursor: se-resize;
+            background: linear-gradient(-45deg, transparent 30%, #666 30%, #666 50%, transparent 50%);
+        }
+    </style>
+</head>
+<body>
+    <div class="drag-handle">≡ TradingView Data Collector</div>
+    
+    <div class="header">
+        <h1>TV Data Collector</h1>
+    </div>
+    
+    <!-- Input Fields Section -->
+    <div class="section">
+        <div class="section-title">📁 Input Configuration</div>
+        
+        <div class="input-group">
+            <label for="symbolsFile">Symbols File (Optional):</label>
+            <input type="file" id="symbolsFile" accept=".txt,.csv">
+        </div>
+        
+        <div class="display-grid">
+            <div class="display-item">
+                <div class="display-label">Symbols Loaded</div>
+                <div class="display-value" id="symbolsLoaded">0</div>
+            </div>
+            <div class="display-item">
+                <div class="display-label">Current Symbol</div>
+                <div class="display-value" id="currentSymbol">-</div>
+            </div>
+        </div>
+        
+        <div class="input-group">
+            <label for="startDate">Start Date:</label>
+            <input type="date" id="startDate" value="2023-01-01">
+        </div>
+        
+        <div class="input-group">
+            <label for="endDate">End Date:</label>
+            <input type="date" id="endDate">
+        </div>
+    </div>
+    
+    <!-- Progress Section -->
+    <div class="section">
+        <div class="section-title">📊 Collection Progress</div>
+        
+        <div class="display-grid">
+            <div class="display-item">
+                <div class="display-label">Collection Timer</div>
+                <div class="display-value timer" id="collectionTimer">00:00:00</div>
+            </div>
+            <div class="display-item">
+                <div class="display-label">Symbol Timer</div>
+                <div class="display-value timer" id="symbolTimer">00:00:00</div>
+            </div>
+        </div>
+        
+        <div class="progress-bar">
+            <div class="progress-fill" id="progressFill"></div>
+        </div>
+        
+        <div class="display-grid">
+            <div class="display-item">
+                <div class="display-label">Current Date</div>
+                <div class="display-value" id="currentDate">-</div>
+            </div>
+            <div class="display-item">
+                <div class="display-label">Date Timer</div>
+                <div class="display-value timer" id="dateTimer">00:00:00</div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Statistics Section -->
+    <div class="section">
+        <div class="section-title">📈 Collection Statistics</div>
+        
+        <div class="display-grid">
+            <div class="display-item">
+                <div class="display-label">Total Log Entries</div>
+                <div class="display-value" id="totalEntries">000</div>
+            </div>
+            <div class="display-item">
+                <div class="display-label">Unique Entries</div>
+                <div class="display-value" id="uniqueEntries">000</div>
+            </div>
+        </div>
+        
+        <div class="display-grid">
+            <div class="display-item">
+                <div class="display-label">Entries Today</div>
+                <div class="display-value" id="entriesToday">000</div>
+            </div>
+            <div class="display-item">
+                <div class="display-label">Last Logged</div>
+                <div class="display-value" id="lastLogged">-</div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Control Buttons -->
+    <div class="control-buttons">
+        <button class="btn btn-primary" id="startCollection">🚀 Start Collection</button>
+        <button class="btn btn-secondary" id="stopCollection" disabled>⏹️ Stop Collection</button>
+    </div>
+    
+    <!-- Status Messages -->
+    <div class="section">
+        <div class="section-title">💬 Status Messages</div>
+        <div class="status-messages" id="statusMessages">
+            <div class="status-message status-info">Ready to start data collection...</div>
+        </div>
+    </div>
+    
+    <div class="resize-handle"></div>
+    
+    <script src="popup.js"></script>
+</body>
+</html>

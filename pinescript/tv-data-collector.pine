@@ -1,0 +1,431 @@
+//@version=6
+indicator("TradingView Data Collector", shorttitle="TV-DataCollector", overlay=true, max_bars_back=5000)
+
+// ============================================================================
+// INPUT PARAMETERS
+// ============================================================================
+
+// Core indicators
+atr_period = input.int(200, title="ATR Period", minval=1)
+sma_length = input.int(200, title="SMA Length", minval=1)
+ema_length = input.int(20, title="EMA Length", minval=1)
+
+// Trade parameters
+tp_multiplier = input.int(10, title="Take Profit ATR Multiplier (RRR)", minval=1)
+
+// Date range
+enable_date_filter = input.bool(false, title="Enable Date Filter")
+start_date = input.time(timestamp("01 Jan 2023 00:00"), title="Start Date")
+end_date = input.time(timestamp("31 Dec 2024 23:59"), title="End Date")
+
+// Visual options
+show_entry_lines = input.bool(true, title="Show Entry Lines")
+show_sl_lines = input.bool(true, title="Show Stop Loss Lines")
+show_tp_lines = input.bool(true, title="Show Take Profit Lines")
+show_atr_size = input.bool(true, title="Show ATR Size")
+show_visuals = input.bool(true, title="Show Visuals")
+show_entry_labels = input.bool(true, title="Show Entry Labels")
+show_payload_log = input.bool(true, title="Show Payload Log on Chart")
+inputs_in_status = input.bool(true, title="Inputs in Status Line")
+
+// Feature extraction parameters
+ohlcv_length = input.int(200, title="OHLCV Array Length", minval=1, maxval=200)
+pullback_lookback = input.int(20, title="Pullback Lookback Period", minval=1)
+
+// Alert settings
+enable_alerts = input.bool(true, title="Enable Alerts (Webhooks)")
+
+// ============================================================================
+// CORE CALCULATIONS
+// ============================================================================
+
+// Calculate indicators
+sma200 = ta.sma(close, sma_length)
+ema20 = ta.ema(close, ema_length)
+atr200 = ta.atr(atr_period)
+
+// Plot moving averages
+plot(show_visuals ? sma200 : na, color=color.purple, linewidth=2, title="SMA 200")
+plot(show_visuals ? ema20 : na, color=color.gray, linewidth=2, title="EMA 20")
+
+// ============================================================================
+// SIGNAL DETECTION LOGIC
+// ============================================================================
+
+// Helper function for 3-decimal rounding
+round3(x) => math.round(x * 1000) / 1000.0
+
+// Trend direction (based on closed bars)
+sma_trend_up = close[1] > sma200[1]
+sma_trend_down = close[1] < sma200[1]
+
+// EMA crossover detection (prevent immediate retriggering)
+ema_cross_down = close[1] > ema20[1] and close < close[1] and not(close[2] > ema20[2])  // For long signals
+ema_cross_up = close[1] < ema20[1] and close > close[1] and not(close[2] < ema20[2])    // For short signals
+
+// Signal state management
+var bool last_signal_long = false
+var bool last_signal_short = false
+var int signal_counter = 0
+
+// Reset conditions (3 consecutive closes)
+three_closes_above_ema = close > ema20 and close[1] > ema20 and close[2] > ema20
+three_closes_below_ema = close < ema20 and close[1] < ema20 and close[2] < ema20
+
+// Reset signal states
+if last_signal_long and sma_trend_up and three_closes_above_ema
+    last_signal_long := false
+if last_signal_short and sma_trend_down and three_closes_below_ema
+    last_signal_short := false
+
+// Entry conditions
+long_signal = sma_trend_up and ema_cross_down and not last_signal_long
+short_signal = sma_trend_down and ema_cross_up and not last_signal_short
+
+// Date range check
+in_date_range = not enable_date_filter or (time >= start_date and time <= end_date)
+
+// ============================================================================
+// FEATURE EXTRACTION FUNCTIONS
+// ============================================================================
+
+// Build CSV from array
+build_csv_from_array(arr) =>
+    var string result = ""
+    result := ""
+    if array.size(arr) > 0
+        for i = 0 to array.size(arr) - 1
+            val = array.get(arr, i)
+            rounded_val = round3(val)
+            result := result + (i == 0 ? "" : ",") + str.tostring(rounded_val)
+    result
+
+// Volume Delta calculation helper
+get_volume_delta(bars_back) =>
+    if bars_back == 0
+        volume - volume[1]
+    else
+        total_vol = 0.0
+        for i = 0 to bars_back - 1
+            total_vol := total_vol + volume[i]
+        prev_total = 0.0
+        for i = bars_back to (bars_back * 2) - 1
+            prev_total := prev_total + volume[i]
+        total_vol - prev_total
+
+// Comprehensive feature extraction
+extract_predata_features(signal_side) =>
+    // Entry values
+    P_entry = close
+    ATR_entry = atr200
+    
+    if ATR_entry <= 0
+        [na, ""]
+    else
+        atr_inv = 1.0 / ATR_entry
+        
+        // === CORE FEATURES (ATR Normalized) ===
+        atr_percentage = round3(ATR_entry / P_entry)
+        sma200_distance = round3((P_entry - sma200) * atr_inv)
+        ema20_distance = round3((P_entry - ema20) * atr_inv)
+        ema_sma_spread = round3((ema20 - sma200) * atr_inv)
+        
+        // === SLOPES ===
+        ema20_slope_5bar = round3((ema20 - ema20[5]) / (5 * ATR_entry))
+        sma200_slope_20bar = round3((sma200 - sma200[20]) / (20 * ATR_entry))
+        
+        // === VOLUME DELTA (normalized) ===
+        vol_delta_1 = round3(get_volume_delta(1) * atr_inv)
+        vol_delta_5 = round3(get_volume_delta(5) * atr_inv)
+        vol_delta_20 = round3(get_volume_delta(20) * atr_inv)
+        vol_delta_50 = round3(get_volume_delta(50) * atr_inv)
+        vol_delta_100 = round3(get_volume_delta(100) * atr_inv)
+        vol_delta_150 = round3(get_volume_delta(150) * atr_inv)
+        vol_delta_200 = round3(get_volume_delta(200) * atr_inv)
+        
+        // === RETURNS ===
+        return_5bar = round3((P_entry - close[5]) * atr_inv)
+        return_20bar = round3((P_entry - close[20]) * atr_inv)
+        return_50bar = round3((P_entry - close[50]) * atr_inv)
+        return_100bar = round3((P_entry - close[100]) * atr_inv)
+        return_150bar = round3((P_entry - close[150]) * atr_inv)
+        return_200bar = round3((P_entry - close[200]) * atr_inv)
+        
+        // === BAR SHAPE ===
+        bar_range = round3((high - low) * atr_inv)
+        bar_body = round3((close - open) * atr_inv)
+        upper_wick = round3((high - math.max(open, close)) * atr_inv)
+        lower_wick = round3((math.min(open, close) - low) * atr_inv)
+        
+        // === VOLUME ===
+        vol_sma = ta.sma(volume, 20)
+        volume_ratio = round3(volume / vol_sma)
+        vol_stdev = ta.stdev(volume, 20)
+        volume_zscore = vol_stdev > 0 ? round3((volume - vol_sma) / vol_stdev) : 0.0
+        
+        // === PULLBACK ===
+        pullback_up = round3((ema20 - ta.lowest(low, pullback_lookback)) * atr_inv)
+        pullback_down = round3((ta.highest(high, pullback_lookback) - ema20) * atr_inv)
+        
+        // === OHLCV ARRAYS ===
+        var open_arr = array.new<float>()
+        var high_arr = array.new<float>()
+        var low_arr = array.new<float>()
+        var close_arr = array.new<float>()
+        
+        array.clear(open_arr)
+        array.clear(high_arr)  
+        array.clear(low_arr)
+        array.clear(close_arr)
+        
+        for i = ohlcv_length - 1 to 0
+            array.push(open_arr, round3((open[i] - P_entry) * atr_inv))
+            array.push(high_arr, round3((high[i] - P_entry) * atr_inv))
+            array.push(low_arr, round3((low[i] - P_entry) * atr_inv))
+            array.push(close_arr, round3((close[i] - P_entry) * atr_inv))
+            
+        open_csv = build_csv_from_array(open_arr)
+        high_csv = build_csv_from_array(high_arr)
+        low_csv = build_csv_from_array(low_arr)
+        close_csv = build_csv_from_array(close_arr)
+        
+        // === BUILD JSON ===
+        entry_datetime = str.replace(str.format_time(time, "yyyy-MM-dd HH:mm:ss", "UTC"), " ", "T") + ".000Z"
+        
+        json_payload = '{"type":"PreData"' +
+                      ',"entry_datetime":"' + entry_datetime + '"' +
+                      ',"symbol":"' + syminfo.tickerid + '"' +
+                      ',"timeframe":"' + timeframe.period + '"' +
+                      ',"side":"' + signal_side + '"' +
+                      ',"atr_percentage":' + str.tostring(atr_percentage) +
+                      ',"sma200_distance":' + str.tostring(sma200_distance) +
+                      ',"ema20_distance":' + str.tostring(ema20_distance) +
+                      ',"ema_sma_spread":' + str.tostring(ema_sma_spread) +
+                      ',"ema20_slope_5bar":' + str.tostring(ema20_slope_5bar) +
+                      ',"sma200_slope_20bar":' + str.tostring(sma200_slope_20bar) +
+                      ',"volumeDelta_1bar":' + str.tostring(vol_delta_1) +
+                      ',"volumeDelta_5bar":' + str.tostring(vol_delta_5) +
+                      ',"volumeDelta_20bar":' + str.tostring(vol_delta_20) +
+                      ',"volumeDelta_50bar":' + str.tostring(vol_delta_50) +
+                      ',"volumeDelta_100bar":' + str.tostring(vol_delta_100) +
+                      ',"volumeDelta_150bar":' + str.tostring(vol_delta_150) +
+                      ',"volumeDelta_200bar":' + str.tostring(vol_delta_200) +
+                      ',"return_5bar":' + str.tostring(return_5bar) +
+                      ',"return_20bar":' + str.tostring(return_20bar) +
+                      ',"return_50bar":' + str.tostring(return_50bar) +
+                      ',"return_100bar":' + str.tostring(return_100bar) +
+                      ',"return_150bar":' + str.tostring(return_150bar) +
+                      ',"return_200bar":' + str.tostring(return_200bar) +
+                      ',"bar_range":' + str.tostring(bar_range) +
+                      ',"bar_body":' + str.tostring(bar_body) +
+                      ',"upper_wick":' + str.tostring(upper_wick) +
+                      ',"lower_wick":' + str.tostring(lower_wick) +
+                      ',"volume_ratio":' + str.tostring(volume_ratio) +
+                      ',"volume_zscore":' + str.tostring(volume_zscore) +
+                      ',"pullback_up":' + str.tostring(pullback_up) +
+                      ',"pullback_down":' + str.tostring(pullback_down) +
+                      ',"ohlcv":{"open":[' + open_csv + '],"high":[' + high_csv + '],"low":[' + low_csv + '],"close":[' + close_csv + ']}}'
+        
+        [ATR_entry, json_payload]
+
+// ============================================================================
+// POST-DATA TRACKING
+// ============================================================================
+
+// Arrays for tracking active positions
+var array<float> active_entry_prices = array.new<float>()
+var array<float> active_entry_atrs = array.new<float>()
+var array<bool> active_is_long = array.new<bool>()
+var array<int> active_entry_times = array.new<int>()
+var array<int> active_entry_bars = array.new<int>()
+var array<float> active_max_atr = array.new<float>()
+var array<float> active_min_atr = array.new<float>()
+var array<int> active_bars_to_max = array.new<int>()
+var array<int> active_bars_to_min = array.new<int>()
+var array<int> active_signal_nums = array.new<int>()
+
+// Add new position to tracking
+add_position_tracking(entry_price, entry_atr, is_long, signal_num) =>
+    array.push(active_entry_prices, entry_price)
+    array.push(active_entry_atrs, entry_atr)
+    array.push(active_is_long, is_long)
+    array.push(active_entry_times, time)
+    array.push(active_entry_bars, bar_index)
+    array.push(active_max_atr, 0.0)
+    array.push(active_min_atr, 0.0)
+    array.push(active_bars_to_max, 0)
+    array.push(active_bars_to_min, 0)
+    array.push(active_signal_nums, signal_num)
+
+// Update and check exit conditions for active positions
+update_positions() =>
+    completed_positions = array.new<string>()
+    
+    for i = array.size(active_entry_prices) - 1 to 0
+        entry_price = array.get(active_entry_prices, i)
+        entry_atr = array.get(active_entry_atrs, i)
+        is_long = array.get(active_is_long, i)
+        entry_time = array.get(active_entry_times, i)
+        entry_bar = array.get(active_entry_bars, i)
+        max_atr = array.get(active_max_atr, i)
+        min_atr = array.get(active_min_atr, i)
+        bars_to_max = array.get(active_bars_to_max, i)
+        bars_to_min = array.get(active_bars_to_min, i)
+        signal_num = array.get(active_signal_nums, i)
+        
+        // Calculate current ATR move
+        atr_move = is_long ? (close - entry_price) / entry_atr : (entry_price - close) / entry_atr
+        bars_elapsed = bar_index - entry_bar
+        
+        // Update max/min tracking
+        new_max = false
+        new_min = false
+        
+        if atr_move > max_atr
+            max_atr := atr_move
+            bars_to_max := bars_elapsed
+            new_max := true
+            array.set(active_max_atr, i, max_atr)
+            array.set(active_bars_to_max, i, bars_to_max)
+            
+        if atr_move < min_atr
+            min_atr := atr_move
+            bars_to_min := bars_elapsed
+            new_min := true
+            array.set(active_min_atr, i, min_atr)
+            array.set(active_bars_to_min, i, bars_to_min)
+        
+        // Check exit conditions
+        should_exit = false
+        exit_reason = ""
+        
+        if min_atr <= -1.0
+            should_exit := true
+            exit_reason := "stop_loss"
+        else if max_atr >= tp_multiplier
+            should_exit := true
+            exit_reason := "take_profit"
+            
+        if should_exit and in_date_range
+            // Create PostData JSON
+            entry_datetime = str.replace(str.format_time(entry_time, "yyyy-MM-dd HH:mm:ss", "UTC"), " ", "T") + ".000Z"
+            
+            postdata_json = '{"type":"PostData"' +
+                           ',"entry_datetime":"' + entry_datetime + '"' +
+                           ',"symbol":"' + syminfo.tickerid + '"' +
+                           ',"timeframe":"' + timeframe.period + '"' +
+                           ',"side":"' + (is_long ? "long" : "short") + '"' +
+                           ',"maxATR":' + str.tostring(round3(max_atr)) +
+                           ',"barsUntilMaxATR":' + str.tostring(bars_to_max) +
+                           ',"minATR":' + str.tostring(round3(min_atr)) +
+                           ',"barsUntilMinATR":' + str.tostring(bars_to_min) +
+                           ',"exit_reason":"' + exit_reason + '"' +
+                           ',"signal_number":' + str.tostring(signal_num) + '}'
+            
+            array.push(completed_positions, postdata_json)
+            
+            // Remove from active tracking
+            array.remove(active_entry_prices, i)
+            array.remove(active_entry_atrs, i)
+            array.remove(active_is_long, i)
+            array.remove(active_entry_times, i)
+            array.remove(active_entry_bars, i)
+            array.remove(active_max_atr, i)
+            array.remove(active_min_atr, i)
+            array.remove(active_bars_to_max, i)
+            array.remove(active_bars_to_min, i)
+            array.remove(active_signal_nums, i)
+    
+    completed_positions
+
+// ============================================================================
+// SIGNAL PROCESSING AND ALERTS
+// ============================================================================
+
+// Process new signals
+if long_signal and in_date_range and barstate.isconfirmed
+    last_signal_long := true
+    signal_counter := signal_counter + 1
+    
+    [atr_val, predata_json] = extract_predata_features("long")
+    if predata_json != "" and atr_val > 0
+        if enable_alerts
+            log.info(predata_json)
+            alert(predata_json, alert.freq_once_per_bar)
+        
+        // Add to PostData tracking
+        add_position_tracking(close, atr_val, true, signal_counter)
+
+if short_signal and in_date_range and barstate.isconfirmed
+    last_signal_short := true
+    signal_counter := signal_counter + 1
+    
+    [atr_val, predata_json] = extract_predata_features("short")
+    if predata_json != "" and atr_val > 0
+        if enable_alerts
+            log.info(predata_json)
+            alert(predata_json, alert.freq_once_per_bar)
+        
+        // Add to PostData tracking
+        add_position_tracking(close, atr_val, false, signal_counter)
+
+// Update positions and emit PostData
+completed_positions = update_positions()
+if barstate.isconfirmed and array.size(completed_positions) > 0
+    for i = 0 to array.size(completed_positions) - 1
+        postdata_json = array.get(completed_positions, i)
+        if enable_alerts
+            log.info(postdata_json)
+            alert(postdata_json, alert.freq_once_per_bar)
+
+// ============================================================================
+// VISUAL ELEMENTS
+// ============================================================================
+
+// Entry labels
+if show_entry_labels and long_signal and in_date_range
+    label.new(bar_index, low - (high - low) * 0.1, text="LONG\n#" + str.tostring(signal_counter), 
+              style=label.style_label_up, color=color.green, textcolor=color.white, size=size.small)
+
+if show_entry_labels and short_signal and in_date_range  
+    label.new(bar_index, high + (high - low) * 0.1, text="SHORT\n#" + str.tostring(signal_counter),
+              style=label.style_label_down, color=color.red, textcolor=color.white, size=size.small)
+
+// Entry/SL/TP lines
+if show_entry_lines and (long_signal or short_signal) and in_date_range
+    entry_price = close
+    
+    // Entry line
+    line.new(bar_index, entry_price, bar_index + 20, entry_price, 
+             color=color.blue, width=1, style=line.style_solid)
+    
+    if show_sl_lines
+        // Stop loss line
+        sl_price = long_signal ? entry_price - atr200 : entry_price + atr200
+        line.new(bar_index, sl_price, bar_index + 20, sl_price,
+                 color=color.red, width=1, style=line.style_solid)
+    
+    if show_tp_lines
+        // Take profit line  
+        tp_price = long_signal ? entry_price + (atr200 * tp_multiplier) : entry_price - (atr200 * tp_multiplier)
+        line.new(bar_index, tp_price, bar_index + 20, tp_price,
+                 color=color.green, width=1, style=line.style_solid)
+
+// ============================================================================
+// STATUS TABLE
+// ============================================================================
+
+if barstate.islast and show_atr_size
+    var table status_table = table.new(position.bottom_right, 2, 4, bgcolor=color.white, border_width=1)
+    
+    table.cell(status_table, 0, 0, "ATR Size", text_color=color.black, text_size=size.small)
+    table.cell(status_table, 1, 0, str.tostring(round3(atr200)), text_color=color.blue, text_size=size.small)
+    
+    table.cell(status_table, 0, 1, "ATR %", text_color=color.black, text_size=size.small) 
+    table.cell(status_table, 1, 1, str.tostring(round3(atr200/close*100)) + "%", text_color=color.blue, text_size=size.small)
+    
+    table.cell(status_table, 0, 2, "Signals", text_color=color.black, text_size=size.small)
+    table.cell(status_table, 1, 2, str.tostring(signal_counter), text_color=color.purple, text_size=size.small)
+    
+    table.cell(status_table, 0, 3, "Active Pos", text_color=color.black, text_size=size.small)
+    table.cell(status_table, 1, 3, str.tostring(array.size(active_entry_prices)), text_color=color.orange, text_size=size.small)
