@@ -13,6 +13,18 @@ class TVPineLogsExtractor {
         this.dateList = [];
         this.abortController = null;
         
+        // Stopwatch timers
+        this.collectionStartTime = null;
+        this.symbolStartTime = null;
+        this.dateStartTime = null;
+        this.stopwatchInterval = null;
+        
+        // Progress tracking
+        this.totalEntriesCount = 0;
+        this.currentDateEntriesCount = 0;
+        this.currentSymbolEntriesCount = 0;
+        this.lastLoggedTime = null;
+        
         this.init();
     }
     
@@ -89,6 +101,15 @@ class TVPineLogsExtractor {
         this.currentSymbolIndex = 0;
         this.currentDateIndex = 0;
         
+        // Reset progress counters
+        this.totalEntriesCount = 0;
+        this.currentDateEntriesCount = 0;
+        this.currentSymbolEntriesCount = 0;
+        this.lastLoggedTime = null;
+        
+        // Start stopwatches
+        this.startStopwatches();
+        
         this.abortController = new AbortController();
         
         console.log('Starting collection with config:', config);
@@ -109,9 +130,13 @@ class TVPineLogsExtractor {
                 uniqueEntries: 0
             }});
             
+            // Update UI
+            this.updateProgressDisplay();
+            
             // Process each symbol
             for (let i = 0; i < symbols.length && this.isCollecting; i++) {
                 this.currentSymbolIndex = i;
+                this.resetSymbolStopwatch();
                 await this.processSymbol(symbols[i], i);
                 
                 // Small delay between symbols
@@ -138,7 +163,57 @@ class TVPineLogsExtractor {
         if (this.abortController) {
             this.abortController.abort();
         }
+        this.stopStopwatches();
         console.log('Collection stopped');
+    }
+    
+    updateProgressDisplay() {
+        // Update all progress fields in the UI
+        const totalEntries = document.getElementById('totalEntries');
+        const uniqueEntries = document.getElementById('uniqueEntries');
+        const entriesCurrentDate = document.getElementById('entriesCurrentDate');
+        const entriesThisSymbol = document.getElementById('entriesThisSymbol');
+        const currentSymbol = document.getElementById('currentSymbol');
+        const currentDate = document.getElementById('currentDate');
+        const symbolProgress = document.getElementById('symbolProgress');
+        const dateProgress = document.getElementById('dateProgress');
+        const lastLogged = document.getElementById('lastLogged');
+        
+        if (totalEntries) totalEntries.textContent = this.totalEntriesCount;
+        if (uniqueEntries) uniqueEntries.textContent = this.uniqueKeys.size;
+        if (entriesCurrentDate) entriesCurrentDate.textContent = this.currentDateEntriesCount;
+        if (entriesThisSymbol) entriesThisSymbol.textContent = this.currentSymbolEntriesCount;
+        
+        if (currentSymbol && this.currentConfig) {
+            const symbols = this.currentConfig.symbols || [];
+            if (symbols.length > 0 && this.currentSymbolIndex < symbols.length) {
+                const sym = symbols[this.currentSymbolIndex];
+                // Extract ticker only (after colon)
+                const ticker = sym.includes(':') ? sym.split(':')[1] : sym;
+                currentSymbol.textContent = ticker;
+            }
+        }
+        
+        if (currentDate && this.dateList && this.currentDateIndex < this.dateList.length) {
+            const dateRange = this.dateList[this.currentDateIndex];
+            currentDate.textContent = dateRange.startDate || '-';
+        }
+        
+        if (symbolProgress && this.currentConfig) {
+            const symbols = this.currentConfig.symbols || [];
+            symbolProgress.textContent = `${this.currentSymbolIndex + 1}/${symbols.length}`;
+        }
+        
+        if (dateProgress && this.dateList) {
+            dateProgress.textContent = `${this.currentDateIndex + 1}/${this.dateList.length}`;
+        }
+        
+        if (lastLogged && this.lastLoggedTime) {
+            // Format as yyyy-MM-dd HH:mm
+            const dt = new Date(this.lastLoggedTime);
+            const formatted = `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')} ${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`;
+            lastLogged.textContent = formatted;
+        }
     }
     
     async processSymbol(symbol, symbolIndex) {
@@ -430,32 +505,67 @@ class TVPineLogsExtractor {
         console.log(`[DEBUG] Processing ${logElements.length} log elements`);
         
         logElements.forEach(logElement => {
+            // Skip if already processed
+            if (logElement.hasAttribute('data-tv-processed')) {
+                return;
+            }
+            
             try {
-                const content = logElement.textContent?.trim();
-                if (!content) return;
+                const logText = logElement.textContent?.trim();
+                if (!logText) return;
                 
                 // Check if this looks like a JSON log entry from our indicator
-                if (this.isOurLogEntry(content)) {
-                    const timestamp = this.extractTimestamp(logElement) || new Date().toISOString();
+                if (this.isOurLogEntry(logText)) {
+                    // Extract timestamp and JSON separately
+                    // Format: [2023-01-01 12:00:00]: {"symbol": ...}
+                    const timestampMatch = logText.match(/^\[(.*?)\]:\s*/);
                     
-                    // Try to parse the JSON to validate structure
-                    try {
-                        const parsedData = JSON.parse(content);
-                        if (parsedData.symbol && parsedData.timeframe) {
-                            entries.push({
-                                timestamp: timestamp,
-                                content: content,
-                                element: logElement,
-                                parsed: parsedData
-                            });
-                            console.log('[DEBUG] Found valid log entry:', parsedData.symbol, parsedData.type);
+                    if (timestampMatch) {
+                        const timestamp = timestampMatch[1];
+                        const jsonText = logText.substring(timestampMatch[0].length);
+                        
+                        try {
+                            const parsedData = JSON.parse(jsonText);
+                            
+                            if (parsedData.symbol && parsedData.timeframe) {
+                                // Normalize timestamps to ISO format
+                                parsedData.timestamp = this.normalizeTimestamp(timestamp);
+                                parsedData.collected_at = new Date().toISOString();
+                                
+                                // Normalize other datetime fields if present
+                                if (parsedData.entry_datetime) {
+                                    parsedData.entry_datetime = this.normalizeTimestamp(parsedData.entry_datetime);
+                                }
+                                if (parsedData.entry_date) {
+                                    parsedData.entry_date = this.normalizeTimestamp(parsedData.entry_date);
+                                }
+                                
+                                entries.push({
+                                    timestamp: parsedData.timestamp,
+                                    content: jsonText,
+                                    element: logElement,
+                                    parsed: parsedData
+                                });
+                                
+                                console.log('[DEBUG] Found valid log entry:', parsedData.symbol, parsedData.type || 'unknown');
+                                
+                                // Mark as processed
+                                logElement.setAttribute('data-tv-processed', 'true');
+                            }
+                        } catch (parseError) {
+                            console.error('[DEBUG] Failed to parse log entry JSON:', parseError);
+                            console.error('[DEBUG] JSON text was:', jsonText);
+                            // Mark as processed to avoid repeated errors
+                            logElement.setAttribute('data-tv-processed', 'true');
                         }
-                    } catch (parseError) {
-                        console.warn('[DEBUG] Failed to parse log entry JSON:', parseError);
+                    } else {
+                        console.warn('[DEBUG] No timestamp found in log:', logText.substring(0, 100));
                     }
                 }
             } catch (error) {
                 console.error('Error processing log element:', error);
+                // Mark as processed to avoid repeated errors
+                logElement.setAttribute('data-tv-processed', 'true');
             }
         });
         
@@ -465,10 +575,44 @@ class TVPineLogsExtractor {
     
     isOurLogEntry(content) {
         // Check if the content looks like our JSON data
-        return (content.includes('"type":"PreData"') || 
-                content.includes('"type":"PostData"')) &&
-               content.includes('"symbol":"') &&
-               content.includes('"timeframe":"');
+        // Format: [timestamp]: {"symbol": "BINANCE:BTCUSDT.P", ...}
+        return content.includes('{"symbol"') && 
+               (content.includes('"type":"PreData"') || content.includes('"type":"PostData"'));
+    }
+    
+    normalizeTimestamp(dateStr) {
+        // Convert various timestamp formats to ISO 8601 UTC
+        if (!dateStr) return new Date().toISOString();
+        
+        try {
+            // Handle format: "2023-01-01 12:00:00" or "2023-01-01 12:00"
+            if (dateStr.match(/^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}/)) {
+                // Assume UTC and convert to ISO format
+                const parts = dateStr.split(/[\s:]/);
+                const datePart = parts[0]; // YYYY-MM-DD
+                const hour = parts[1] || '00';
+                const minute = parts[2] || '00';
+                const second = parts[3] || '00';
+                return `${datePart}T${hour}:${minute}:${second}.000Z`;
+            }
+            
+            // Already ISO format
+            if (dateStr.includes('T') && dateStr.includes('Z')) {
+                return dateStr;
+            }
+            
+            // Try to parse and convert
+            const date = new Date(dateStr);
+            if (!isNaN(date.getTime())) {
+                return date.toISOString();
+            }
+            
+            // Fallback
+            return new Date().toISOString();
+        } catch (error) {
+            console.error('Error normalizing timestamp:', error);
+            return new Date().toISOString();
+        }
     }
     
     extractTimestamp(element) {
@@ -884,6 +1028,74 @@ class TVPineLogsExtractor {
         return new Promise(resolve => setTimeout(resolve, ms));
     }
     
+    // ====================================================================
+    // STOPWATCH METHODS
+    // ====================================================================
+    
+    initializeStopwatches() {
+        this.collectionStartTime = null;
+        this.symbolStartTime = null;
+        this.dateStartTime = null;
+        this.stopwatchInterval = null;
+    }
+    
+    startStopwatches() {
+        this.collectionStartTime = Date.now();
+        this.symbolStartTime = Date.now();
+        this.dateStartTime = Date.now();
+        
+        // Update stopwatches every second
+        if (this.stopwatchInterval) {
+            clearInterval(this.stopwatchInterval);
+        }
+        this.stopwatchInterval = setInterval(() => {
+            this.updateStopwatchDisplays();
+        }, 1000);
+    }
+    
+    stopStopwatches() {
+        if (this.stopwatchInterval) {
+            clearInterval(this.stopwatchInterval);
+            this.stopwatchInterval = null;
+        }
+    }
+    
+    resetSymbolStopwatch() {
+        this.symbolStartTime = Date.now();
+        this.currentSymbolEntriesCount = 0;
+    }
+    
+    resetDateStopwatch() {
+        this.dateStartTime = Date.now();
+        this.currentDateEntriesCount = 0;
+    }
+    
+    updateStopwatchDisplays() {
+        const formatTime = (ms) => {
+            const totalSeconds = Math.floor(ms / 1000);
+            const hours = Math.floor(totalSeconds / 3600);
+            const minutes = Math.floor((totalSeconds % 3600) / 60);
+            const seconds = totalSeconds % 60;
+            return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+        };
+        
+        const now = Date.now();
+        
+        if (this.collectionStartTime) {
+            document.getElementById('collectionStopwatch').textContent = formatTime(now - this.collectionStartTime);
+        }
+        if (this.symbolStartTime) {
+            document.getElementById('symbolStopwatch').textContent = formatTime(now - this.symbolStartTime);
+        }
+        if (this.dateStartTime) {
+            document.getElementById('dateStopwatch').textContent = formatTime(now - this.dateStartTime);
+        }
+    }
+    
+    // ====================================================================
+    // END STOPWATCH METHODS
+    // ====================================================================
+    
     showAutoPopupNotification() {
         // Check if we should show the floating window (only once per session)
         const sessionKey = 'tvDataCollector_floatingWindowShown_' + window.location.hostname;
@@ -952,9 +1164,25 @@ class TVPineLogsExtractor {
                 
                 <!-- Content -->
                 <div style="padding: 16px; flex: 1; overflow-y: auto;">
-                    <!-- Symbol Input -->
-                    <div style="margin-bottom: 16px;">
-                        <label style="display: block; margin-bottom: 4px; font-size: 12px; color: #ccc;">Symbols (comma-separated):</label>
+                    <!-- File Upload for Symbols -->
+                    <div style="margin-bottom: 12px;">
+                        <label style="display: block; margin-bottom: 4px; font-size: 12px; color: #ccc;">Upload Symbols (.txt file):</label>
+                        <input id="symbolsFileInput" type="file" accept=".txt" style="
+                            width: 100%;
+                            padding: 6px;
+                            background: #2d2d2d;
+                            border: 1px solid #555;
+                            color: #fff;
+                            border-radius: 4px;
+                            font-size: 11px;
+                            box-sizing: border-box;
+                        ">
+                        <div style="font-size: 10px; color: #888; margin-top: 4px;">Symbols loaded: <span id="symbolsLoaded" style="color: #4CAF50;">0</span></div>
+                    </div>
+                    
+                    <!-- Manual Symbol Input (alternative) -->
+                    <div style="margin-bottom: 12px;">
+                        <label style="display: block; margin-bottom: 4px; font-size: 12px; color: #ccc;">Or enter manually:</label>
                         <input id="symbolsInput" type="text" placeholder="BINANCE:BTCUSDT.P, BINANCE:ETHUSDT.P" style="
                             width: 100%;
                             padding: 8px;
@@ -998,18 +1226,56 @@ class TVPineLogsExtractor {
                     </div>
                     
                     <!-- Progress Display -->
-                    <div style="margin-bottom: 16px; padding: 12px; background: #2d2d2d; border-radius: 4px;">
-                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px;">
-                            <div style="text-align: center;">
-                                <div style="font-size: 10px; color: #888;">Total Entries</div>
-                                <div id="totalEntries" style="font-size: 18px; font-weight: bold; color: #2196F3;">0</div>
-                            </div>
-                            <div style="text-align: center;">
-                                <div style="font-size: 10px; color: #888;">Unique Entries</div>
-                                <div id="uniqueEntries" style="font-size: 18px; font-weight: bold; color: #4CAF50;">0</div>
+                    <div style="margin-bottom: 12px; padding: 10px; background: #2d2d2d; border-radius: 4px;">
+                        <!-- Stopwatches -->
+                        <div style="margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid #444;">
+                            <div style="font-size: 11px; color: #888; margin-bottom: 6px;">⏱️ Timers</div>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px; text-align: center;">
+                                <div>
+                                    <div style="font-size: 9px; color: #666;">Collection</div>
+                                    <div id="collectionStopwatch" style="font-size: 14px; color: #2196F3; font-family: monospace;">00:00:00</div>
+                                </div>
+                                <div>
+                                    <div style="font-size: 9px; color: #666;">Symbol</div>
+                                    <div id="symbolStopwatch" style="font-size: 14px; color: #FF9800; font-family: monospace;">00:00:00</div>
+                                </div>
+                                <div>
+                                    <div style="font-size: 9px; color: #666;">Date</div>
+                                    <div id="dateStopwatch" style="font-size: 14px; color: #9C27B0; font-family: monospace;">00:00:00</div>
+                                </div>
                             </div>
                         </div>
-                        <div style="font-size: 10px; color: #888; text-align: center;">Current: <span id="currentSymbol" style="color: #fff;">-</span></div>
+                        
+                        <!-- Current Status -->
+                        <div style="margin-bottom: 8px;">
+                            <div style="font-size: 10px; color: #888;">Current Symbol: <span id="currentSymbol" style="color: #fff; font-weight: bold;">-</span> (<span id="symbolProgress">0/0</span>)</div>
+                            <div style="font-size: 10px; color: #888;">Current Date: <span id="currentDate" style="color: #fff; font-weight: bold;">-</span> (<span id="dateProgress">0/0</span>)</div>
+                        </div>
+                        
+                        <!-- Entry Counts -->
+                        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 8px;">
+                            <div style="text-align: center;">
+                                <div style="font-size: 9px; color: #888;">Total</div>
+                                <div id="totalEntries" style="font-size: 16px; font-weight: bold; color: #2196F3;">0</div>
+                            </div>
+                            <div style="text-align: center;">
+                                <div style="font-size: 9px; color: #888;">Unique</div>
+                                <div id="uniqueEntries" style="font-size: 16px; font-weight: bold; color: #4CAF50;">0</div>
+                            </div>
+                            <div style="text-align: center;">
+                                <div style="font-size: 9px; color: #888;">Current Date</div>
+                                <div id="entriesCurrentDate" style="font-size: 16px; font-weight: bold; color: #FF9800;">0</div>
+                            </div>
+                            <div style="text-align: center;">
+                                <div style="font-size: 9px; color: #888;">This Symbol</div>
+                                <div id="entriesThisSymbol" style="font-size: 16px; font-weight: bold; color: #9C27B0;">0</div>
+                            </div>
+                        </div>
+                        
+                        <!-- Last Logged -->
+                        <div style="font-size: 10px; color: #888; text-align: center;">
+                            Last Logged: <span id="lastLogged" style="color: #4CAF50; font-family: monospace;">-</span>
+                        </div>
                     </div>
                     
                     <!-- Control Buttons -->
@@ -1078,6 +1344,30 @@ class TVPineLogsExtractor {
     }
     
     setupFloatingWindowEvents() {
+        // File upload handler
+        const fileInput = document.getElementById('symbolsFileInput');
+        fileInput?.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file && file.name.endsWith('.txt')) {
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    const content = event.target.result;
+                    // Parse symbols (one per line or comma-separated)
+                    const symbols = content.split(/[,\n]/)
+                        .map(s => s.trim())
+                        .filter(s => s.length > 0 && s.includes(':'));
+                    
+                    // Update UI
+                    document.getElementById('symbolsLoaded').textContent = symbols.length;
+                    document.getElementById('symbolsInput').value = symbols.join(', ');
+                    this.updateFloatingWindowStatus(`📁 Loaded ${symbols.length} symbols from file`, 'success');
+                };
+                reader.readAsText(file);
+            } else {
+                this.updateFloatingWindowStatus('⚠️ Please select a .txt file', 'error');
+            }
+        });
+        
         // Minimize button
         const minimizeBtn = document.getElementById('minimizeWindow');
         minimizeBtn?.addEventListener('click', () => {
@@ -1099,6 +1389,9 @@ class TVPineLogsExtractor {
             startBtn.disabled = false;
             stopBtn.disabled = true;
         });
+        
+        // Initialize stopwatches
+        this.initializeStopwatches();
     }
     
     startCollectionFromFloatingWindow() {
