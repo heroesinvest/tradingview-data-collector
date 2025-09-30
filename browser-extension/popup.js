@@ -134,6 +134,8 @@ class TVDataCollectorUI {
     async startCollection() {
         if (this.isCollecting) return;
         
+        console.log('Starting collection...');
+        
         this.isCollecting = true;
         this.collectionStartTime = Date.now();
         this.currentSymbolIndex = 0;
@@ -146,6 +148,11 @@ class TVDataCollectorUI {
         try {
             // Send message to content script to start collection
             const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            console.log('Current tab:', tab);
+            
+            if (!tab.url.includes('tradingview.com')) {
+                throw new Error('Please navigate to TradingView first');
+            }
             
             const collectionConfig = {
                 symbols: this.symbols,
@@ -154,9 +161,15 @@ class TVDataCollectorUI {
                 command: 'startCollection'
             };
             
-            await chrome.tabs.sendMessage(tab.id, collectionConfig);
+            console.log('Sending message to content script:', collectionConfig);
+            
+            const response = await chrome.tabs.sendMessage(tab.id, collectionConfig);
+            console.log('Content script response:', response);
+            
+            this.updateStatus('Collection started successfully', 'success');
             
         } catch (error) {
+            console.error('Error starting collection:', error);
             this.updateStatus(`Error starting collection: ${error.message}`, 'error');
             this.stopCollection();
         }
@@ -315,7 +328,12 @@ class TVDataCollectorUI {
     
     // Message handling from content script
     handleMessage(message) {
+        console.log('Popup received message:', message);
+        
         switch (message.type) {
+            case 'contentScriptReady':
+                this.updateStatus(`Content script ready on: ${message.data.url}`, 'success');
+                break;
             case 'collectionProgress':
                 this.handleCollectionProgress(message.data);
                 break;
@@ -334,6 +352,8 @@ class TVDataCollectorUI {
             case 'entriesFound':
                 this.handleEntriesFound(message.data);
                 break;
+            default:
+                console.log('Unknown message type:', message.type);
         }
     }
     
@@ -390,12 +410,34 @@ class TVDataCollectorUI {
 
 // Initialize UI when popup loads
 document.addEventListener('DOMContentLoaded', () => {
+    console.log('Popup DOM loaded, initializing UI...');
     window.tvDataCollector = new TVDataCollectorUI();
+    
+    // Add debugging info
+    console.log('TradingView Data Collector Popup initialized');
+    
+    // Test if we're on TradingView
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs[0]) {
+            const url = tabs[0].url;
+            console.log('Current tab URL:', url);
+            if (url.includes('tradingview.com')) {
+                console.log('✅ On TradingView - extension should work');
+            } else {
+                console.log('❌ Not on TradingView - extension may not work');
+                window.tvDataCollector.updateStatus('Please navigate to TradingView first', 'warning');
+            }
+        }
+    });
 });
 
 // Listen for messages from content script
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    console.log('Popup received runtime message:', message);
     if (window.tvDataCollector) {
         window.tvDataCollector.handleMessage(message);
+    } else {
+        console.warn('tvDataCollector not initialized yet');
     }
+    sendResponse({ received: true });
 });

@@ -25,7 +25,10 @@ class TVPineLogsExtractor {
         // Inject helper script for deeper DOM access
         this.injectHelperScript();
         
-        console.log('TVPineLogsExtractor initialized');
+        console.log('TVPineLogsExtractor initialized on:', window.location.href);
+        
+        // Send ready signal to popup
+        this.sendMessage({ type: 'contentScriptReady', data: { url: window.location.href } });
     }
     
     injectHelperScript() {
@@ -38,14 +41,22 @@ class TVPineLogsExtractor {
     }
     
     async handleMessage(message, sendResponse) {
+        console.log('Content script received message:', message);
+        
         try {
             switch (message.command) {
                 case 'startCollection':
+                    console.log('Starting collection from content script');
                     await this.startCollection(message);
                     break;
                 case 'stopCollection':
+                    console.log('Stopping collection from content script');
                     this.stopCollection();
                     break;
+                case 'test':
+                    console.log('Test message received:', message.message);
+                    sendResponse({ success: true, message: 'Content script is working!' });
+                    return; // Don't continue to the end
                 default:
                     console.log('Unknown command:', message.command);
             }

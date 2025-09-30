@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>TradingView Data Collector - Debug</title>
+    <style>
+        body {
+            font-family: monospace;
+            background: #1e1e1e;
+            color: #ffffff;
+            padding: 20px;
+            margin: 0;
+        }
+        .debug-section {
+            margin-bottom: 20px;
+            padding: 15px;
+            background: #2d2d2d;
+            border-radius: 5px;
+            border: 1px solid #404040;
+        }
+        .debug-title {
+            color: #4CAF50;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        .test-button {
+            background: #2196F3;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 10px;
+            margin-bottom: 5px;
+        }
+        .test-button:hover {
+            background: #1976D2;
+        }
+        .log-output {
+            background: #1a1a1a;
+            border: 1px solid #444;
+            border-radius: 4px;
+            padding: 10px;
+            max-height: 300px;
+            overflow-y: auto;
+            font-size: 12px;
+        }
+        .log-line {
+            margin-bottom: 2px;
+            padding: 2px 0;
+        }
+        .log-info { color: #2196F3; }
+        .log-success { color: #4CAF50; }
+        .log-warning { color: #FF9800; }
+        .log-error { color: #f44336; }
+    </style>
+</head>
+<body>
+    <h1>🔧 TradingView Data Collector - Debug Console</h1>
+    
+    <div class="debug-section">
+        <div class="debug-title">📋 Extension Status</div>
+        <div id="extensionStatus">Checking...</div>
+    </div>
+    
+    <div class="debug-section">
+        <div class="debug-title">🧪 Quick Tests</div>
+        <button class="test-button" onclick="testExtensionAPI()">Test Extension API</button>
+        <button class="test-button" onclick="testTradingViewURL()">Test TradingView URL</button>
+        <button class="test-button" onclick="testContentScript()">Test Content Script</button>
+        <button class="test-button" onclick="clearLog()">Clear Log</button>
+    </div>
+    
+    <div class="debug-section">
+        <div class="debug-title">📝 Debug Log</div>
+        <div class="log-output" id="debugLog">
+            <div class="log-line log-info">Debug console initialized...</div>
+        </div>
+    </div>
+    
+    <div class="debug-section">
+        <div class="debug-title">ℹ️ Instructions</div>
+        <ol>
+            <li>Make sure you're on a TradingView chart page</li>
+            <li>Check that the extension appears in the Chrome toolbar</li>
+            <li>Click the extension icon to open the popup</li>
+            <li>Run the tests above to diagnose any issues</li>
+        </ol>
+    </div>
+
+    <script>
+        let logCounter = 0;
+
+        function log(message, type = 'info') {
+            const logOutput = document.getElementById('debugLog');
+            const timestamp = new Date().toLocaleTimeString();
+            const logLine = document.createElement('div');
+            logLine.className = `log-line log-${type}`;
+            logLine.textContent = `[${timestamp}] ${message}`;
+            logOutput.appendChild(logLine);
+            logOutput.scrollTop = logOutput.scrollHeight;
+            
+            // Keep only last 100 lines
+            if (logOutput.children.length > 100) {
+                logOutput.removeChild(logOutput.firstChild);
+            }
+            
+            console.log(`[DEBUG] ${message}`);
+        }
+
+        function clearLog() {
+            document.getElementById('debugLog').innerHTML = '<div class="log-line log-info">Log cleared...</div>';
+        }
+
+        async function testExtensionAPI() {
+            log('Testing Chrome Extension APIs...', 'info');
+            
+            try {
+                // Test basic Chrome APIs
+                if (typeof chrome !== 'undefined') {
+                    log('✅ Chrome API available', 'success');
+                } else {
+                    log('❌ Chrome API not available', 'error');
+                    return;
+                }
+                
+                // Test tabs API
+                if (chrome.tabs) {
+                    log('✅ Tabs API available', 'success');
+                    
+                    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+                    log(`Current tab: ${tabs[0]?.url || 'Unknown'}`, 'info');
+                } else {
+                    log('❌ Tabs API not available', 'error');
+                }
+                
+                // Test storage API
+                if (chrome.storage) {
+                    log('✅ Storage API available', 'success');
+                } else {
+                    log('❌ Storage API not available', 'error');
+                }
+                
+                // Test runtime API
+                if (chrome.runtime) {
+                    log('✅ Runtime API available', 'success');
+                    log(`Extension ID: ${chrome.runtime.id}`, 'info');
+                } else {
+                    log('❌ Runtime API not available', 'error');
+                }
+                
+            } catch (error) {
+                log(`Extension API test failed: ${error.message}`, 'error');
+            }
+        }
+
+        async function testTradingViewURL() {
+            log('Testing TradingView URL detection...', 'info');
+            
+            try {
+                const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+                const currentURL = tabs[0]?.url || window.location.href;
+                
+                log(`Current URL: ${currentURL}`, 'info');
+                
+                if (currentURL.includes('tradingview.com')) {
+                    log('✅ On TradingView - extension should work', 'success');
+                } else {
+                    log('❌ Not on TradingView - please navigate to TradingView first', 'warning');
+                }
+                
+            } catch (error) {
+                log(`URL test failed: ${error.message}`, 'error');
+            }
+        }
+
+        async function testContentScript() {
+            log('Testing content script communication...', 'info');
+            
+            try {
+                const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+                const tab = tabs[0];
+                
+                if (!tab.url.includes('tradingview.com')) {
+                    log('❌ Not on TradingView - content script test skipped', 'warning');
+                    return;
+                }
+                
+                log('Sending test message to content script...', 'info');
+                
+                const response = await chrome.tabs.sendMessage(tab.id, {
+                    command: 'test',
+                    message: 'Debug console test'
+                });
+                
+                if (response && response.success) {
+                    log('✅ Content script communication working', 'success');
+                } else {
+                    log('❌ Content script not responding', 'error');
+                }
+                
+            } catch (error) {
+                log(`Content script test failed: ${error.message}`, 'error');
+                
+                if (error.message.includes('Could not establish connection')) {
+                    log('💡 Tip: Try refreshing the TradingView page', 'warning');
+                }
+            }
+        }
+
+        // Auto-run initial tests
+        document.addEventListener('DOMContentLoaded', () => {
+            log('Debug console loaded', 'success');
+            
+            setTimeout(() => {
+                testExtensionAPI();
+                testTradingViewURL();
+            }, 500);
+        });
+
+        // Update extension status
+        function updateExtensionStatus() {
+            const statusDiv = document.getElementById('extensionStatus');
+            
+            if (typeof chrome !== 'undefined' && chrome.runtime) {
+                statusDiv.innerHTML = `
+                    <div style="color: #4CAF50;">✅ Extension loaded successfully</div>
+                    <div>ID: ${chrome.runtime.id}</div>
+                    <div>Manifest: v${chrome.runtime.getManifest().manifest_version}</div>
+                `;
+            } else {
+                statusDiv.innerHTML = '<div style="color: #f44336;">❌ Extension not loaded properly</div>';
+            }
+        }
+
+        updateExtensionStatus();
+    </script>
+</body>
+</html>
