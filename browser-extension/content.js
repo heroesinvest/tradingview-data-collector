@@ -235,43 +235,65 @@ class TVPineLogsExtractor {
             let previousItemCount = 0;
             let stableCount = 0;
             
-            while (scrollAttempts < maxScrollAttempts && this.isCollecting) {
-                // Extract currently visible log entries
-                const currentEntries = await this.extractVisibleLogEntries(virtualList);
-                
-                // Add new entries to our collection
-                currentEntries.forEach(entry => {
-                    const key = entry.timestamp + '|' + entry.content;
-                    if (!entries.some(e => (e.timestamp + '|' + e.content) === key)) {
-                        entries.push(entry);
-                    }
-                });
-                
-                // Check if we're getting new items
-                if (entries.length === previousItemCount) {
-                    stableCount++;
-                    if (stableCount >= 5) {
-                        console.log('No new entries found after 5 scroll attempts, stopping');
-                        break;
-                    }
-                } else {
-                    stableCount = 0;
-                    previousItemCount = entries.length;
+        while (scrollAttempts < maxScrollAttempts && this.isCollecting) {
+            // Extract currently visible log entries
+            const currentEntries = await this.extractVisibleLogEntries(virtualList);
+            
+            // Add new entries to our collection with deduplication
+            let newEntriesAdded = 0;
+            currentEntries.forEach(entry => {
+                const key = entry.timestamp + '|' + entry.content;
+                if (!entries.some(e => (e.timestamp + '|' + e.content) === key)) {
+                    entries.push(entry);
+                    newEntriesAdded++;
                 }
-                
-                // Scroll to load more items
-                await this.scrollVirtualList(virtualList);
-                await this.sleep(200); // Wait for new items to load
-                
-                scrollAttempts++;
-                
-                // Update progress
-                if (scrollAttempts % 10 === 0) {
-                    console.log(`Scroll attempt ${scrollAttempts}, entries found: ${entries.length}`);
+            });
+            
+            console.log(`[DEBUG] Scroll ${scrollAttempts}: Found ${currentEntries.length} current, added ${newEntriesAdded} new, total: ${entries.length}`);
+            
+            // Check if we're getting new items
+            if (entries.length === previousItemCount) {
+                stableCount++;
+                console.log(`[DEBUG] No new entries (stable count: ${stableCount}/10)`);
+                if (stableCount >= 10) { // Increased from 5 to 10 for more thorough collection
+                    console.log('No new entries found after 10 scroll attempts, stopping');
+                    break;
+                }
+            } else {
+                stableCount = 0;
+                previousItemCount = entries.length;
+            }
+            
+            // Check scroll position to detect if we've reached the end
+            const currentScrollTop = virtualList.scrollTop;
+            const maxScroll = virtualList.scrollHeight - virtualList.clientHeight;
+            
+            if (currentScrollTop >= maxScroll - 10) {
+                console.log('[DEBUG] Reached end of scroll area');
+                // Try a few more times in case there's lazy loading
+                if (stableCount >= 3) {
+                    break;
                 }
             }
             
-            console.log(`Extraction complete. Found ${entries.length} total entries after ${scrollAttempts} scroll attempts`);
+            // Scroll to load more items
+            await this.scrollVirtualList(virtualList);
+            await this.sleep(500); // Increased wait time for virtual DOM updates
+            
+            scrollAttempts++;
+            
+            // Update progress more frequently
+            if (scrollAttempts % 5 === 0) {
+                console.log(`[PROGRESS] Scroll attempt ${scrollAttempts}/${maxScrollAttempts}, entries: ${entries.length}`);
+                this.sendMessage({ type: 'extractionProgress', data: {
+                    scrollAttempts,
+                    maxScrollAttempts,
+                    entriesFound: entries.length,
+                    currentScrollTop: virtualList.scrollTop,
+                    maxScroll: virtualList.scrollHeight
+                }});
+            }
+        }            console.log(`Extraction complete. Found ${entries.length} total entries after ${scrollAttempts} scroll attempts`);
             
         } catch (error) {
             console.error('Error extracting from virtual list:', error);
@@ -281,113 +303,152 @@ class TVPineLogsExtractor {
     }
     
     async findPineLogsPanel() {
-        // Look for common Pine Logs panel selectors
-        const selectors = [
-            '[data-name="pine-logs"]',
-            '.pine-logs-panel',
-            '[class*="pine-logs"]',
-            '[class*="logs-panel"]',
-            // Add more specific selectors based on TradingView's structure
-            '.bottom-area [class*="logs"]',
-            '.chart-gui-wrapper [class*="logs"]'
-        ];
+        console.log('[DEBUG] Starting enhanced Pine logs container search...');
         
-        for (const selector of selectors) {
-            const element = document.querySelector(selector);
-            if (element) {
-                console.log(`Found Pine Logs panel using selector: ${selector}`);
-                return element;
-            }
+        // Primary method: Look for Pine logs widget by test ID (from reference)
+        const pineLogsWidget = document.querySelector('[data-test-id-widget-type="pine_logs"]');
+        if (pineLogsWidget) {
+            console.log('[DEBUG] Found Pine logs widget by test ID:', pineLogsWidget);
+            return pineLogsWidget;
         }
         
-        // Fallback: search by text content
+        // Secondary: Look for widgetbar Pine logs
+        const widgetBarPineLogs = document.querySelector('.widgetbar-widget-pine_logs');
+        if (widgetBarPineLogs) {
+            console.log('[DEBUG] Found Pine logs in widgetbar:', widgetBarPineLogs);
+            return widgetBarPineLogs;
+        }
+        
+        // Tertiary: Look for study title containing "Pre Trade"
+        const preTradeStudy = document.querySelector('[data-study-title="Pre Trade"]');
+        if (preTradeStudy) {
+            console.log('[DEBUG] Found Pre Trade study:', preTradeStudy);
+            return preTradeStudy.closest('[class*="widget"], [class*="panel"]') || preTradeStudy;
+        }
+        
+        // Quaternary: Text-based search for Pine logs
         const allElements = document.querySelectorAll('*');
         for (const element of allElements) {
-            if (element.textContent && element.textContent.includes('Pine Logs')) {
-                const parent = element.closest('[class*="panel"], [class*="container"]');
-                if (parent) {
-                    console.log('Found Pine Logs panel by text content');
-                    return parent;
+            const text = element.textContent;
+            if (text && (text.includes('Pine Logs') || text.includes('pine_logs'))) {
+                const widget = element.closest('[data-test-id-widget-type], [class*="widget"], [class*="panel"]');
+                if (widget) {
+                    console.log('[DEBUG] Found Pine logs by text search:', widget);
+                    return widget;
                 }
             }
         }
         
+        console.log('[DEBUG] No Pine logs panel found');
         return null;
     }
     
     async findVirtualListContainer(logsPanel) {
-        // Look for virtual list containers within the logs panel
-        const selectors = [
-            '[class*="virtual-list"]',
-            '[class*="virtualized"]',
-            '[class*="list-container"]',
-            '[class*="scroll-container"]',
-            '.ReactVirtualized__List',
-            '[data-testid*="list"]'
+        console.log('[DEBUG] Searching for virtual list container in:', logsPanel);
+        
+        // Primary: Look for the exact scrollable viewport from reference (corrected path)
+        const scrollViewport = logsPanel.querySelector('.logsList-L0IhqRpX .container-L0IhqRpX');
+        if (scrollViewport) {
+            console.log('[DEBUG] Found scroll viewport:', scrollViewport);
+            const style = window.getComputedStyle(scrollViewport);
+            console.log('[DEBUG] Viewport overflow-y:', style.overflowY);
+            console.log('[DEBUG] Viewport height:', scrollViewport.offsetHeight);
+            console.log('[DEBUG] Viewport scroll height:', scrollViewport.scrollHeight);
+            return scrollViewport;
+        }
+        
+        // Secondary: Use reference fallback method to find scrollable element
+        const allDivs = logsPanel.querySelectorAll('div');
+        for (const div of allDivs) {
+            const style = window.getComputedStyle(div);
+            if ((style.overflowY === 'auto' || style.overflowY === 'scroll') && 
+                div.scrollHeight > div.offsetHeight) {
+                console.log('[DEBUG] Found scrollable div with content:', div);
+                console.log('[DEBUG] ScrollHeight:', div.scrollHeight, 'OffsetHeight:', div.offsetHeight);
+                return div;
+            }
+        }
+        
+        // Tertiary: Look for standard virtual list classes
+        const virtualSelectors = [
+            '.list-L0IhqRpX',
+            '.virtualScroll-L0IhqRpX', 
+            '[class*="list-"]',
+            '[class*="virtual"]',
+            '[class*="scroll"]'
         ];
         
-        for (const selector of selectors) {
+        for (const selector of virtualSelectors) {
             const element = logsPanel.querySelector(selector);
             if (element) {
-                console.log(`Found virtual list using selector: ${selector}`);
+                console.log(`[DEBUG] Found virtual list using selector: ${selector}`);
                 return element;
             }
         }
         
-        // Fallback: find scrollable container
-        const scrollableElements = logsPanel.querySelectorAll('*');
-        for (const element of scrollableElements) {
-            const style = window.getComputedStyle(element);
-            if (style.overflowY === 'auto' || style.overflowY === 'scroll') {
-                console.log('Found scrollable container as virtual list');
-                return element;
-            }
-        }
-        
-        return logsPanel; // Use the panel itself as fallback
+        console.log('[DEBUG] No scrollable viewport found, using Pine logs widget as fallback');
+        return logsPanel;
     }
     
     async extractVisibleLogEntries(container) {
         const entries = [];
         
-        // Look for log entry elements
-        const entrySelectors = [
+        // Use reference implementation selectors for log messages
+        const logSelectors = [
+            '.msg-zsZSd11H',                    // TradingView's log message class
+            '[class*="msg-"]',                  // Any message class variant
+            '.pine-console .log-entry',         // Pine console log entries
+            '.pine-logs .log-item',             // Pine logs items
             '[class*="log-entry"]',
             '[class*="log-item"]',
             '[class*="message"]',
             'li',
-            '[role="listitem"]',
-            '.log-line'
+            '[role="listitem"]'
         ];
         
         let logElements = [];
-        for (const selector of entrySelectors) {
-            logElements = container.querySelectorAll(selector);
-            if (logElements.length > 0) {
+        for (const selector of logSelectors) {
+            const elements = container.querySelectorAll(selector);
+            if (elements.length > 0) {
+                logElements = Array.from(elements);
+                console.log(`[DEBUG] Found ${elements.length} log elements using selector: ${selector}`);
                 break;
             }
         }
         
-        for (const element of logElements) {
+        console.log(`[DEBUG] Processing ${logElements.length} log elements`);
+        
+        logElements.forEach(logElement => {
             try {
-                const content = element.textContent?.trim();
-                if (!content) continue;
+                const content = logElement.textContent?.trim();
+                if (!content) return;
                 
                 // Check if this looks like a JSON log entry from our indicator
                 if (this.isOurLogEntry(content)) {
-                    const timestamp = this.extractTimestamp(element) || new Date().toISOString();
+                    const timestamp = this.extractTimestamp(logElement) || new Date().toISOString();
                     
-                    entries.push({
-                        timestamp: timestamp,
-                        content: content,
-                        element: element
-                    });
+                    // Try to parse the JSON to validate structure
+                    try {
+                        const parsedData = JSON.parse(content);
+                        if (parsedData.symbol && parsedData.timeframe) {
+                            entries.push({
+                                timestamp: timestamp,
+                                content: content,
+                                element: logElement,
+                                parsed: parsedData
+                            });
+                            console.log('[DEBUG] Found valid log entry:', parsedData.symbol, parsedData.type);
+                        }
+                    } catch (parseError) {
+                        console.warn('[DEBUG] Failed to parse log entry JSON:', parseError);
+                    }
                 }
             } catch (error) {
                 console.error('Error processing log element:', error);
             }
-        }
+        });
         
+        console.log(`[DEBUG] Extracted ${entries.length} valid log entries`);
         return entries;
     }
     
@@ -432,12 +493,23 @@ class TVPineLogsExtractor {
     }
     
     async scrollVirtualList(container) {
-        // Try different scrolling methods
+        console.log('[DEBUG] Scrolling virtual list, current scrollTop:', container.scrollTop);
         
-        // Method 1: Scroll by wheel event
+        const scrollStep = 500; // Larger scroll steps for better coverage
+        const initialScrollTop = container.scrollTop;
+        
+        // Method 1: Direct scrollTop manipulation (most reliable)
+        try {
+            container.scrollTop += scrollStep;
+            console.log('[DEBUG] Scrolled to:', container.scrollTop);
+        } catch (error) {
+            console.warn('ScrollTop manipulation failed:', error);
+        }
+        
+        // Method 2: Wheel event for virtual scroll triggering
         try {
             const wheelEvent = new WheelEvent('wheel', {
-                deltaY: 1000,
+                deltaY: scrollStep,
                 deltaMode: WheelEvent.DOM_DELTA_PIXEL,
                 bubbles: true,
                 cancelable: true
@@ -447,15 +519,9 @@ class TVPineLogsExtractor {
             console.warn('Wheel event scroll failed:', error);
         }
         
-        // Method 2: Direct scrollTop manipulation
+        // Method 3: Keyboard Page Down event
         try {
-            container.scrollTop += 1000;
-        } catch (error) {
-            console.warn('ScrollTop manipulation failed:', error);
-        }
-        
-        // Method 3: Keyboard event (Page Down)
-        try {
+            container.focus(); // Ensure element has focus
             const keyEvent = new KeyboardEvent('keydown', {
                 key: 'PageDown',
                 code: 'PageDown',
@@ -466,6 +532,16 @@ class TVPineLogsExtractor {
             container.dispatchEvent(keyEvent);
         } catch (error) {
             console.warn('Keyboard scroll failed:', error);
+        }
+        
+        // Method 4: Try scrolling parent container if this one didn't scroll
+        if (container.scrollTop === initialScrollTop && container.parentElement) {
+            console.log('[DEBUG] Container did not scroll, trying parent');
+            try {
+                container.parentElement.scrollTop += scrollStep;
+            } catch (error) {
+                console.warn('Parent scroll failed:', error);
+            }
         }
     }
     
@@ -610,24 +686,67 @@ class TVPineLogsExtractor {
     async navigateToReplayMode() {
         console.log('Entering replay mode');
         
+        // First ensure Pine Logs is activated
+        await this.activatePineLogsWidget();
+        
         // Look for replay button or mode
         const replaySelectors = [
             '[data-name="replay"]',
             '[class*="replay"]',
             'button[title*="replay"]',
-            'button[title*="Replay"]'
+            'button[title*="Replay"]',
+            '[data-test-id="replay-button"]'
         ];
         
         for (const selector of replaySelectors) {
             const button = document.querySelector(selector);
             if (button) {
+                console.log(`Found replay button: ${selector}`);
                 button.click();
-                await this.sleep(1000);
+                await this.sleep(2000);
                 return;
             }
         }
         
         console.warn('Replay mode button not found');
+    }
+    
+    async activatePineLogsWidget() {
+        console.log('[DEBUG] Attempting to activate Pine logs widget...');
+        
+        // Method 1: Try to find and click the Pine logs tab
+        const pineLogsTab = document.querySelector('[data-test-id-widget-type="pine_logs"]');
+        if (pineLogsTab) {
+            console.log('[DEBUG] Found Pine logs tab, clicking...');
+            pineLogsTab.click();
+            await this.sleep(1000);
+            return true;
+        }
+        
+        // Method 2: Try to find Pine logs in the widget bar
+        const widgetBarTabs = document.querySelectorAll('.widgetbar-tab');
+        for (const tab of widgetBarTabs) {
+            if (tab.textContent && (tab.textContent.includes('Pine') || tab.textContent.includes('Logs'))) {
+                console.log('[DEBUG] Found Pine logs in widget bar, clicking...');
+                tab.click();
+                await this.sleep(1000);
+                return true;
+            }
+        }
+        
+        // Method 3: Try keyboard shortcut
+        try {
+            document.dispatchEvent(new KeyboardEvent('keydown', {
+                key: 'l',
+                ctrlKey: true,
+                bubbles: true
+            }));
+            console.log('[DEBUG] Sent Ctrl+L keyboard shortcut');
+        } catch (error) {
+            console.warn('[DEBUG] Keyboard shortcut failed:', error);
+        }
+        
+        return false;
     }
     
     async setReplayDate(date) {

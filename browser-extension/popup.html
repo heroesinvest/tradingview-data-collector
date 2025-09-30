@@ -11,6 +11,32 @@
             padding: 16px;
             background: #1e1e1e;
             color: #ffffff;
+            position: relative;
+            z-index: 999999;
+        }
+        
+        /* Make popup always stay on top and prevent accidental closing */
+        .popup-container {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            z-index: 999999;
+            pointer-events: none;
+        }
+        
+        .popup-content {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 380px;
+            background: #1e1e1e;
+            border: 2px solid #4CAF50;
+            border-radius: 8px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.8);
+            pointer-events: auto;
+            z-index: 1000000;
         }
         
         .header {
@@ -246,7 +272,7 @@
     </style>
 </head>
 <body>
-    <div class="drag-handle">≡ TradingView Data Collector</div>
+    <div class="drag-handle">≡ TradingView Data Collector (Always On Top)</div>
     
     <div class="header">
         <h1>🚀 TV Data Collector</h1>

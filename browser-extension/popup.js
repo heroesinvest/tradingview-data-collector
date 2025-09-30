@@ -352,6 +352,9 @@ class TVDataCollectorUI {
             case 'entriesFound':
                 this.handleEntriesFound(message.data);
                 break;
+            case 'extractionProgress':
+                this.handleExtractionProgress(message.data);
+                break;
             default:
                 console.log('Unknown message type:', message.type);
         }
@@ -405,6 +408,26 @@ class TVDataCollectorUI {
         this.stats.lastLogged = data.lastLogged;
         this.updateUI();
         this.saveState();
+    }
+    
+    handleExtractionProgress(data) {
+        const progressPercent = (data.scrollAttempts / data.maxScrollAttempts) * 100;
+        document.getElementById('progressFill').style.width = `${progressPercent}%`;
+        
+        this.updateStatus(
+            `Extracting logs: ${data.scrollAttempts}/${data.maxScrollAttempts} scrolls, ${data.entriesFound} entries found`,
+            'info'
+        );
+    }
+    
+    handleExtractionProgress(data) {
+        const progressPercent = (data.scrollAttempts / data.maxScrollAttempts) * 100;
+        document.getElementById('progressFill').style.width = `${progressPercent}%`;
+        
+        this.updateStatus(
+            `Extracting logs: ${data.scrollAttempts}/${data.maxScrollAttempts} scrolls, ${data.entriesFound} entries found`,
+            'info'
+        );
     }
 }
 
