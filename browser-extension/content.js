@@ -207,6 +207,11 @@ class TVPineLogsExtractor {
                     : null
             }});
             
+            // Update floating window
+            this.updateFloatingWindowStatus(`Found ${entries.length} entries, ${filteredEntries.length} unique`, 'success');
+            const currentSymbolEl = document.getElementById('currentSymbol');
+            if (currentSymbolEl) currentSymbolEl.textContent = symbol;
+            
         } catch (error) {
             console.error(`Error processing date range ${dateRange.start}-${dateRange.end}:`, error);
         }
@@ -231,6 +236,12 @@ class TVPineLogsExtractor {
             if (!virtualList) {
                 throw new Error('Virtual list container not found');
             }
+            
+            // IMPORTANT: Scroll to the very top before starting
+            console.log('[DEBUG] Scrolling to top of list...');
+            virtualList.scrollTop = 0;
+            await this.sleep(500); // Wait for scroll to complete and DOM to update
+            console.log('[DEBUG] At top, starting extraction from position:', virtualList.scrollTop);
             
             let previousItemCount = 0;
             let stableCount = 0;
@@ -278,7 +289,7 @@ class TVPineLogsExtractor {
             
             // Scroll to load more items
             await this.scrollVirtualList(virtualList);
-            await this.sleep(500); // Increased wait time for virtual DOM updates
+            await this.sleep(100); // Reduced from 500ms to 100ms for faster scrolling
             
             scrollAttempts++;
             
@@ -495,7 +506,7 @@ class TVPineLogsExtractor {
     async scrollVirtualList(container) {
         console.log('[DEBUG] Scrolling virtual list, current scrollTop:', container.scrollTop);
         
-        const scrollStep = 500; // Larger scroll steps for better coverage
+        const scrollStep = 1000; // Increased from 500 to 1000 for faster scrolling
         const initialScrollTop = container.scrollTop;
         
         // Method 1: Direct scrollTop manipulation (most reliable)
@@ -874,107 +885,187 @@ class TVPineLogsExtractor {
     }
     
     showAutoPopupNotification() {
-        // Check if we should show the auto-popup (only once per session)
-        const sessionKey = 'tvDataCollector_autoPopupShown_' + window.location.hostname;
+        // Check if we should show the floating window (only once per session)
+        const sessionKey = 'tvDataCollector_floatingWindowShown_' + window.location.hostname;
         if (sessionStorage.getItem(sessionKey)) {
             return; // Already shown this session
         }
         
         // Wait for page to fully load
         setTimeout(() => {
-            this.createAutoPopupNotification();
+            this.createFloatingWindow();
             sessionStorage.setItem(sessionKey, 'true');
-        }, 3000);
+        }, 2000); // Reduced from 3000 to 2000
     }
     
-    createAutoPopupNotification() {
-        // Create floating notification
-        const notification = document.createElement('div');
-        notification.id = 'tvDataCollectorNotification';
-        notification.innerHTML = `
-            <div style="
+    createFloatingWindow() {
+        // Remove any existing window
+        const existing = document.getElementById('tvDataCollectorWindow');
+        if (existing) existing.remove();
+        
+        // Create floating window container
+        const window = document.createElement('div');
+        window.id = 'tvDataCollectorWindow';
+        window.innerHTML = `
+            <div id="floatingWindowContainer" style="
                 position: fixed;
-                top: 20px;
+                top: 80px;
                 right: 20px;
-                z-index: 10000;
-                background: linear-gradient(135deg, #1e1e1e 0%, #2d2d2d 100%);
-                color: #4CAF50;
-                padding: 16px 20px;
+                width: 380px;
+                min-height: 500px;
+                z-index: 999999;
+                background: #1e1e1e;
+                color: #ffffff;
+                border: 2px solid #4CAF50;
                 border-radius: 8px;
-                box-shadow: 0 4px 20px rgba(0,0,0,0.3);
-                border: 1px solid #4CAF50;
+                box-shadow: 0 8px 32px rgba(0,0,0,0.8);
                 font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                font-size: 14px;
-                max-width: 300px;
-                animation: slideIn 0.3s ease-out;
+                display: flex;
+                flex-direction: column;
             ">
-                <div style="display: flex; align-items: center; margin-bottom: 8px;">
-                    <span style="font-size: 18px; margin-right: 8px;">🚀</span>
-                    <strong>TradingView Data Collector Ready!</strong>
-                </div>
-                <div style="color: #ccc; font-size: 12px; margin-bottom: 12px;">
-                    Click the extension icon to start collecting Pine Logs data
-                </div>
-                <div style="display: flex; gap: 8px;">
-                    <button id="openCollector" style="
-                        background: #4CAF50;
+                <!-- Header -->
+                <div id="windowHeader" style="
+                    background: #2d2d2d;
+                    padding: 12px 16px;
+                    border-radius: 6px 6px 0 0;
+                    cursor: move;
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    border-bottom: 1px solid #4CAF50;
+                ">
+                    <div style="display: flex; align-items: center;">
+                        <span style="font-size: 18px; margin-right: 8px;">🚀</span>
+                        <strong style="color: #4CAF50;">TV Data Collector</strong>
+                    </div>
+                    <button id="minimizeWindow" style="
+                        background: #f44336;
                         color: white;
                         border: none;
-                        padding: 6px 12px;
+                        width: 24px;
+                        height: 24px;
                         border-radius: 4px;
                         cursor: pointer;
-                        font-size: 12px;
-                        font-weight: bold;
-                    ">Open Collector</button>
-                    <button id="dismissNotification" style="
-                        background: transparent;
-                        color: #888;
-                        border: 1px solid #444;
-                        padding: 6px 12px;
-                        border-radius: 4px;
-                        cursor: pointer;
-                        font-size: 12px;
-                    ">Dismiss</button>
+                        font-size: 16px;
+                    ">×</button>
+                </div>
+                
+                <!-- Content -->
+                <div style="padding: 16px; flex: 1; overflow-y: auto;">
+                    <!-- Symbol Input -->
+                    <div style="margin-bottom: 16px;">
+                        <label style="display: block; margin-bottom: 4px; font-size: 12px; color: #ccc;">Symbols (comma-separated):</label>
+                        <input id="symbolsInput" type="text" placeholder="BINANCE:BTCUSDT.P, BINANCE:ETHUSDT.P" style="
+                            width: 100%;
+                            padding: 8px;
+                            background: #2d2d2d;
+                            border: 1px solid #555;
+                            color: #fff;
+                            border-radius: 4px;
+                            font-size: 12px;
+                            box-sizing: border-box;
+                        ">
+                    </div>
+                    
+                    <!-- Date Range -->
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 16px;">
+                        <div>
+                            <label style="display: block; margin-bottom: 4px; font-size: 12px; color: #ccc;">Start Date:</label>
+                            <input id="startDateInput" type="date" value="2023-01-01" style="
+                                width: 100%;
+                                padding: 6px;
+                                background: #2d2d2d;
+                                border: 1px solid #555;
+                                color: #fff;
+                                border-radius: 4px;
+                                font-size: 12px;
+                                box-sizing: border-box;
+                            ">
+                        </div>
+                        <div>
+                            <label style="display: block; margin-bottom: 4px; font-size: 12px; color: #ccc;">End Date:</label>
+                            <input id="endDateInput" type="date" style="
+                                width: 100%;
+                                padding: 6px;
+                                background: #2d2d2d;
+                                border: 1px solid #555;
+                                color: #fff;
+                                border-radius: 4px;
+                                font-size: 12px;
+                                box-sizing: border-box;
+                            ">
+                        </div>
+                    </div>
+                    
+                    <!-- Progress Display -->
+                    <div style="margin-bottom: 16px; padding: 12px; background: #2d2d2d; border-radius: 4px;">
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px;">
+                            <div style="text-align: center;">
+                                <div style="font-size: 10px; color: #888;">Total Entries</div>
+                                <div id="totalEntries" style="font-size: 18px; font-weight: bold; color: #2196F3;">0</div>
+                            </div>
+                            <div style="text-align: center;">
+                                <div style="font-size: 10px; color: #888;">Unique Entries</div>
+                                <div id="uniqueEntries" style="font-size: 18px; font-weight: bold; color: #4CAF50;">0</div>
+                            </div>
+                        </div>
+                        <div style="font-size: 10px; color: #888; text-align: center;">Current: <span id="currentSymbol" style="color: #fff;">-</span></div>
+                    </div>
+                    
+                    <!-- Control Buttons -->
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 16px;">
+                        <button id="startCollectionBtn" style="
+                            background: #4CAF50;
+                            color: white;
+                            border: none;
+                            padding: 12px;
+                            border-radius: 4px;
+                            cursor: pointer;
+                            font-size: 14px;
+                            font-weight: bold;
+                        ">🚀 Start</button>
+                        <button id="stopCollectionBtn" style="
+                            background: #f44336;
+                            color: white;
+                            border: none;
+                            padding: 12px;
+                            border-radius: 4px;
+                            cursor: pointer;
+                            font-size: 14px;
+                            font-weight: bold;
+                        " disabled>⏹️ Stop</button>
+                    </div>
+                    
+                    <!-- Status Messages -->
+                    <div style="margin-top: 16px;">
+                        <div style="font-size: 12px; font-weight: bold; color: #4CAF50; margin-bottom: 8px;">📝 Status:</div>
+                        <div id="statusMessages" style="
+                            max-height: 150px;
+                            overflow-y: auto;
+                            background: #1a1a1a;
+                            border: 1px solid #444;
+                            border-radius: 4px;
+                            padding: 8px;
+                            font-size: 11px;
+                        ">
+                            <div style="color: #4CAF50;">✅ Ready to collect data</div>
+                        </div>
+                    </div>
                 </div>
             </div>
         `;
         
-        // Add animation styles
-        const style = document.createElement('style');
-        style.textContent = `
-            @keyframes slideIn {
-                from { transform: translateX(100%); opacity: 0; }
-                to { transform: translateX(0); opacity: 1; }
-            }
-            @keyframes slideOut {
-                from { transform: translateX(0); opacity: 1; }
-                to { transform: translateX(100%); opacity: 0; }
-            }
-        `;
-        document.head.appendChild(style);
+        document.body.appendChild(window);
         
-        document.body.appendChild(notification);
+        // Make window draggable
+        this.makeDraggable(window.querySelector('#floatingWindowContainer'), window.querySelector('#windowHeader'));
         
-        // Add event listeners
-        const openBtn = notification.querySelector('#openCollector');
-        const dismissBtn = notification.querySelector('#dismissNotification');
+        // Set up event listeners
+        this.setupFloatingWindowEvents();
         
-        openBtn.addEventListener('click', () => {
-            // Try to trigger extension popup
-            this.sendMessage({ type: 'requestPopupOpen', data: {} });
-            this.removeNotification(notification);
-        });
-        
-        dismissBtn.addEventListener('click', () => {
-            this.removeNotification(notification);
-        });
-        
-        // Auto-dismiss after 10 seconds
-        setTimeout(() => {
-            if (document.getElementById('tvDataCollectorNotification')) {
-                this.removeNotification(notification);
-            }
-        }, 10000);
+        // Set default end date to today
+        const today = new Date().toISOString().split('T')[0];
+        document.getElementById('endDateInput').value = today;
     }
     
     removeNotification(notification) {
@@ -984,6 +1075,124 @@ class TVPineLogsExtractor {
                 notification.parentNode.removeChild(notification);
             }
         }, 300);
+    }
+    
+    setupFloatingWindowEvents() {
+        // Minimize button
+        const minimizeBtn = document.getElementById('minimizeWindow');
+        minimizeBtn?.addEventListener('click', () => {
+            const window = document.getElementById('tvDataCollectorWindow');
+            if (window) window.style.display = 'none';
+        });
+        
+        // Start collection button
+        const startBtn = document.getElementById('startCollectionBtn');
+        startBtn?.addEventListener('click', () => {
+            this.startCollectionFromFloatingWindow();
+        });
+        
+        // Stop collection button
+        const stopBtn = document.getElementById('stopCollectionBtn');
+        stopBtn?.addEventListener('click', () => {
+            this.stopCollection();
+            this.updateFloatingWindowStatus('Collection stopped', 'warning');
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+        });
+    }
+    
+    startCollectionFromFloatingWindow() {
+        const symbolsInput = document.getElementById('symbolsInput').value;
+        const startDate = document.getElementById('startDateInput').value;
+        const endDate = document.getElementById('endDateInput').value;
+        
+        // Parse symbols
+        const symbols = symbolsInput.split(',').map(s => s.trim()).filter(s => s.length > 0);
+        
+        if (symbols.length === 0) {
+            this.updateFloatingWindowStatus('⚠️ Please enter at least one symbol', 'error');
+            return;
+        }
+        
+        // Disable start, enable stop
+        document.getElementById('startCollectionBtn').disabled = true;
+        document.getElementById('stopCollectionBtn').disabled = false;
+        
+        // Start collection
+        this.startCollection({
+            symbols: symbols,
+            startDate: startDate,
+            endDate: endDate,
+            command: 'startCollection'
+        });
+        
+        this.updateFloatingWindowStatus('🚀 Collection started...', 'success');
+    }
+    
+    updateFloatingWindowStatus(message, type = 'info') {
+        const statusContainer = document.getElementById('statusMessages');
+        if (!statusContainer) return;
+        
+        const colors = {
+            info: '#2196F3',
+            success: '#4CAF50',
+            warning: '#FF9800',
+            error: '#f44336'
+        };
+        
+        const statusLine = document.createElement('div');
+        statusLine.style.color = colors[type] || colors.info;
+        statusLine.style.marginBottom = '4px';
+        statusLine.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+        
+        statusContainer.appendChild(statusLine);
+        statusContainer.scrollTop = statusContainer.scrollHeight;
+        
+        // Keep only last 20 messages
+        while (statusContainer.children.length > 20) {
+            statusContainer.removeChild(statusContainer.firstChild);
+        }
+        
+        // Also update stats if this is a progress message
+        if (message.includes('entries')) {
+            const match = message.match(/(\d+)/);
+            if (match) {
+                const totalEl = document.getElementById('totalEntries');
+                const uniqueEl = document.getElementById('uniqueEntries');
+                if (totalEl) totalEl.textContent = match[1];
+                if (uniqueEl) uniqueEl.textContent = this.uniqueKeys.size.toString();
+            }
+        }
+    }
+    
+    makeDraggable(element, handle) {
+        let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
+        
+        handle.onmousedown = dragMouseDown;
+        
+        function dragMouseDown(e) {
+            e.preventDefault();
+            pos3 = e.clientX;
+            pos4 = e.clientY;
+            document.onmouseup = closeDragElement;
+            document.onmousemove = elementDrag;
+        }
+        
+        function elementDrag(e) {
+            e.preventDefault();
+            pos1 = pos3 - e.clientX;
+            pos2 = pos4 - e.clientY;
+            pos3 = e.clientX;
+            pos4 = e.clientY;
+            element.style.top = (element.offsetTop - pos2) + 'px';
+            element.style.left = (element.offsetLeft - pos1) + 'px';
+            element.style.right = 'auto'; // Disable right positioning while dragging
+        }
+        
+        function closeDragElement() {
+            document.onmouseup = null;
+            document.onmousemove = null;
+        }
     }
     
     showClickExtensionHint() {
