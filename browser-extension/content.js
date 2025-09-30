@@ -47,6 +47,20 @@ class TVPineLogsExtractor {
         // Send ready signal to popup
         this.sendMessage({ type: 'contentScriptReady', data: { url: window.location.href } });
         
+        // Add keyboard shortcut to toggle floating window (Ctrl+Shift+T)
+        document.addEventListener('keydown', (e) => {
+            if (e.ctrlKey && e.shiftKey && e.key === 'T') {
+                e.preventDefault();
+                console.log('[SHORTCUT] Ctrl+Shift+T pressed - Toggling floating window');
+                const existing = document.getElementById('tvDataCollectorWindow');
+                if (existing) {
+                    existing.style.display = existing.style.display === 'none' ? 'block' : 'none';
+                } else {
+                    this.createFloatingWindow();
+                }
+            }
+        });
+        
         // Auto-show popup notification on TradingView
         this.showAutoPopupNotification();
     }
@@ -1106,27 +1120,45 @@ class TVPineLogsExtractor {
     // ====================================================================
     
     showAutoPopupNotification() {
-        // Check if we should show the floating window (only once per session)
-        const sessionKey = 'tvDataCollector_floatingWindowShown_' + window.location.hostname;
-        if (sessionStorage.getItem(sessionKey)) {
-            return; // Already shown this session
-        }
+        console.log('[DEBUG] showAutoPopupNotification called');
         
-        // Wait for page to fully load
+        // TEMPORARILY DISABLED: Check if already shown
+        // const sessionKey = 'tvDataCollector_floatingWindowShown_' + window.location.hostname;
+        // const alreadyShown = sessionStorage.getItem(sessionKey);
+        // if (alreadyShown) {
+        //     console.log('[DEBUG] Window already shown this session, skipping');
+        //     return;
+        // }
+        
+        // Wait for page to fully load, then create window
+        console.log('[DEBUG] Setting timeout to create window in 2 seconds...');
         setTimeout(() => {
-            this.createFloatingWindow();
-            sessionStorage.setItem(sessionKey, 'true');
-        }, 2000); // Reduced from 3000 to 2000
+            console.log('[DEBUG] Timeout fired, creating floating window now...');
+            try {
+                this.createFloatingWindow();
+                console.log('[DEBUG] createFloatingWindow() returned successfully');
+                // sessionStorage.setItem(sessionKey, 'true');
+            } catch (error) {
+                console.error('[DEBUG] ERROR creating floating window:', error);
+            }
+        }, 2000);
     }
     
     createFloatingWindow() {
+        console.log('[DEBUG] createFloatingWindow called');
+        
         // Remove any existing window
         const existing = document.getElementById('tvDataCollectorWindow');
-        if (existing) existing.remove();
+        if (existing) {
+            console.log('[DEBUG] Removing existing window');
+            existing.remove();
+        }
         
         // Create floating window container
+        console.log('[DEBUG] Creating new window element');
         const window = document.createElement('div');
         window.id = 'tvDataCollectorWindow';
+        console.log('[DEBUG] Window element created:', window);
         window.innerHTML = `
             <div id="floatingWindowContainer" style="
                 position: fixed;
@@ -1351,17 +1383,23 @@ class TVPineLogsExtractor {
             </div>
         `;
         
+        console.log('[DEBUG] Adding window to document body');
         document.body.appendChild(window);
+        console.log('[DEBUG] Window added to body');
         
         // Make window draggable
         this.makeDraggable(window.querySelector('#floatingWindowContainer'), window.querySelector('#windowHeader'));
+        console.log('[DEBUG] Made window draggable');
         
         // Set up event listeners
         this.setupFloatingWindowEvents();
+        console.log('[DEBUG] Event listeners setup complete');
         
         // Set default end date to today
         const today = new Date().toISOString().split('T')[0];
         document.getElementById('endDateInput').value = today;
+        
+        console.log('[DEBUG] ✅ Floating window creation COMPLETE! Window should be visible now.');
     }
     
     removeNotification(notification) {
