@@ -350,17 +350,13 @@ update_positions() =>
 // SIGNAL PROCESSING AND ALERTS
 // ============================================================================
 
-// Extract features for both signal types (to avoid warnings)
-long_features = long_signal ? extract_predata_features("long") : [na, ""]
-short_features = short_signal ? extract_predata_features("short") : [na, ""]
-
 // Process new signals
 if long_signal and in_date_range and barstate.isconfirmed
     last_signal_long := true
     signal_counter := signal_counter + 1
     
-    atr_val = long_features[0]
-    predata_json = long_features[1]
+    // Extract features for long signal
+    [atr_val, predata_json] = extract_predata_features("long")
     if predata_json != "" and atr_val > 0
         if enable_alerts
             log.info(predata_json)
@@ -373,8 +369,8 @@ if short_signal and in_date_range and barstate.isconfirmed
     last_signal_short := true
     signal_counter := signal_counter + 1
     
-    atr_val = short_features[0]
-    predata_json = short_features[1]
+    // Extract features for short signal
+    [atr_val, predata_json] = extract_predata_features("short")
     if predata_json != "" and atr_val > 0
         if enable_alerts
             log.info(predata_json)
