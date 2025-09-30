@@ -359,7 +359,8 @@ if long_signal and in_date_range and barstate.isconfirmed
     last_signal_long := true
     signal_counter := signal_counter + 1
     
-    [atr_val, predata_json] = long_features
+    atr_val = long_features[0]
+    predata_json = long_features[1]
     if predata_json != "" and atr_val > 0
         if enable_alerts
             log.info(predata_json)
@@ -372,7 +373,8 @@ if short_signal and in_date_range and barstate.isconfirmed
     last_signal_short := true
     signal_counter := signal_counter + 1
     
-    [atr_val, predata_json] = short_features
+    atr_val = short_features[0]
+    predata_json = short_features[1]
     if predata_json != "" and atr_val > 0
         if enable_alerts
             log.info(predata_json)
