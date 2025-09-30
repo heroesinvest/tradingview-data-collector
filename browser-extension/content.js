@@ -381,6 +381,9 @@ class TVPineLogsExtractor {
             }
         }            console.log(`Extraction complete. Found ${entries.length} total entries after ${scrollAttempts} scroll attempts`);
             
+            // Update progress display after extraction
+            this.updateProgressDisplay();
+            
         } catch (error) {
             console.error('Error extracting from virtual list:', error);
         }
@@ -546,6 +549,16 @@ class TVPineLogsExtractor {
                                     element: logElement,
                                     parsed: parsedData
                                 });
+                                
+                                // Update progress counters
+                                this.totalEntriesCount++;
+                                this.currentDateEntriesCount++;
+                                this.currentSymbolEntriesCount++;
+                                
+                                // Track last logged time
+                                if (parsedData.entry_datetime || parsedData.entry_date || parsedData.timestamp) {
+                                    this.lastLoggedTime = parsedData.entry_datetime || parsedData.entry_date || parsedData.timestamp;
+                                }
                                 
                                 console.log('[DEBUG] Found valid log entry:', parsedData.symbol, parsedData.type || 'unknown');
                                 
