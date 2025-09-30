@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';">
+    <title>Extension Test</title>
+</head>
+<body style="width:250px;height:150px;background:#1e1e1e;color:#4CAF50;padding:15px;font-family:Arial;">
+    <h2>🎉 POPUP WORKS!</h2>
+    <p>Extension loaded successfully!</p>
+    <div id="info">Loading...</div>
+    <script>
+        document.getElementById('info').textContent = 'Chrome APIs: ' + (typeof chrome !== 'undefined' ? 'Available' : 'Missing');
+        console.log('Minimal popup loaded successfully!');
+    </script>
+</body>
+</html>
