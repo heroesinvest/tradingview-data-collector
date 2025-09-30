@@ -350,34 +350,36 @@ update_positions() =>
 // SIGNAL PROCESSING AND ALERTS
 // ============================================================================
 
+// Extract features for both signal types (to avoid warnings)
+[long_atr, long_json] = extract_predata_features("long")
+[short_atr, short_json] = extract_predata_features("short")
+
 // Process new signals
 if long_signal and in_date_range and barstate.isconfirmed
     last_signal_long := true
     signal_counter := signal_counter + 1
     
-    // Extract features for long signal
-    [atr_val, predata_json] = extract_predata_features("long")
-    if predata_json != "" and atr_val > 0
+    // Use pre-extracted features for long signal
+    if long_json != "" and long_atr > 0
         if enable_alerts
-            log.info(predata_json)
-            alert(predata_json, alert.freq_once_per_bar)
+            log.info(long_json)
+            alert(long_json, alert.freq_once_per_bar)
         
         // Add to PostData tracking
-        add_position_tracking(close, atr_val, true, signal_counter)
+        add_position_tracking(close, long_atr, true, signal_counter)
 
 if short_signal and in_date_range and barstate.isconfirmed
     last_signal_short := true
     signal_counter := signal_counter + 1
     
-    // Extract features for short signal
-    [atr_val, predata_json] = extract_predata_features("short")
-    if predata_json != "" and atr_val > 0
+    // Use pre-extracted features for short signal
+    if short_json != "" and short_atr > 0
         if enable_alerts
-            log.info(predata_json)
-            alert(predata_json, alert.freq_once_per_bar)
+            log.info(short_json)
+            alert(short_json, alert.freq_once_per_bar)
         
         // Add to PostData tracking
-        add_position_tracking(close, atr_val, false, signal_counter)
+        add_position_tracking(close, short_atr, false, signal_counter)
 
 // Update positions and emit PostData
 completed_positions = update_positions()
