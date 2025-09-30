@@ -270,79 +270,79 @@ update_positions() =>
         completed_positions
     else
         for i = array.size(active_entry_prices) - 1 to 0
-        entry_price = array.get(active_entry_prices, i)
-        entry_atr = array.get(active_entry_atrs, i)
-        is_long = array.get(active_is_long, i)
-        entry_time = array.get(active_entry_times, i)
-        entry_bar = array.get(active_entry_bars, i)
-        max_atr = array.get(active_max_atr, i)
-        min_atr = array.get(active_min_atr, i)
-        bars_to_max = array.get(active_bars_to_max, i)
-        bars_to_min = array.get(active_bars_to_min, i)
-        signal_num = array.get(active_signal_nums, i)
-        
-        // Calculate current ATR move
-        atr_move = is_long ? (close - entry_price) / entry_atr : (entry_price - close) / entry_atr
-        bars_elapsed = bar_index - entry_bar
-        
-        // Update max/min tracking
-        new_max = false
-        new_min = false
-        
-        if atr_move > max_atr
-            max_atr := atr_move
-            bars_to_max := bars_elapsed
-            new_max := true
-            array.set(active_max_atr, i, max_atr)
-            array.set(active_bars_to_max, i, bars_to_max)
+            entry_price = array.get(active_entry_prices, i)
+            entry_atr = array.get(active_entry_atrs, i)
+            is_long = array.get(active_is_long, i)
+            entry_time = array.get(active_entry_times, i)
+            entry_bar = array.get(active_entry_bars, i)
+            max_atr = array.get(active_max_atr, i)
+            min_atr = array.get(active_min_atr, i)
+            bars_to_max = array.get(active_bars_to_max, i)
+            bars_to_min = array.get(active_bars_to_min, i)
+            signal_num = array.get(active_signal_nums, i)
             
-        if atr_move < min_atr
-            min_atr := atr_move
-            bars_to_min := bars_elapsed
-            new_min := true
-            array.set(active_min_atr, i, min_atr)
-            array.set(active_bars_to_min, i, bars_to_min)
-        
-        // Check exit conditions
-        should_exit = false
-        exit_reason = ""
-        
-        if min_atr <= -1.0
-            should_exit := true
-            exit_reason := "stop_loss"
-        else if max_atr >= tp_multiplier
-            should_exit := true
-            exit_reason := "take_profit"
+            // Calculate current ATR move
+            atr_move = is_long ? (close - entry_price) / entry_atr : (entry_price - close) / entry_atr
+            bars_elapsed = bar_index - entry_bar
             
-        if should_exit and in_date_range
-            // Create PostData JSON
-            entry_datetime = str.replace(str.format_time(entry_time, "yyyy-MM-dd HH:mm:ss", "UTC"), " ", "T") + ".000Z"
+            // Update max/min tracking
+            new_max = false
+            new_min = false
             
-            postdata_json = '{"type":"PostData"' +
-                           ',"entry_datetime":"' + entry_datetime + '"' +
-                           ',"symbol":"' + syminfo.tickerid + '"' +
-                           ',"timeframe":"' + timeframe.period + '"' +
-                           ',"side":"' + (is_long ? "long" : "short") + '"' +
-                           ',"maxATR":' + str.tostring(round3(max_atr)) +
-                           ',"barsUntilMaxATR":' + str.tostring(bars_to_max) +
-                           ',"minATR":' + str.tostring(round3(min_atr)) +
-                           ',"barsUntilMinATR":' + str.tostring(bars_to_min) +
-                           ',"exit_reason":"' + exit_reason + '"' +
-                           ',"signal_number":' + str.tostring(signal_num) + '}'
+            if atr_move > max_atr
+                max_atr := atr_move
+                bars_to_max := bars_elapsed
+                new_max := true
+                array.set(active_max_atr, i, max_atr)
+                array.set(active_bars_to_max, i, bars_to_max)
+                
+            if atr_move < min_atr
+                min_atr := atr_move
+                bars_to_min := bars_elapsed
+                new_min := true
+                array.set(active_min_atr, i, min_atr)
+                array.set(active_bars_to_min, i, bars_to_min)
             
-            array.push(completed_positions, postdata_json)
+            // Check exit conditions
+            should_exit = false
+            exit_reason = ""
             
-            // Remove from active tracking
-            array.remove(active_entry_prices, i)
-            array.remove(active_entry_atrs, i)
-            array.remove(active_is_long, i)
-            array.remove(active_entry_times, i)
-            array.remove(active_entry_bars, i)
-            array.remove(active_max_atr, i)
-            array.remove(active_min_atr, i)
-            array.remove(active_bars_to_max, i)
-            array.remove(active_bars_to_min, i)
-            array.remove(active_signal_nums, i)
+            if min_atr <= -1.0
+                should_exit := true
+                exit_reason := "stop_loss"
+            else if max_atr >= tp_multiplier
+                should_exit := true
+                exit_reason := "take_profit"
+                
+            if should_exit and in_date_range
+                // Create PostData JSON
+                entry_datetime = str.replace(str.format_time(entry_time, "yyyy-MM-dd HH:mm:ss", "UTC"), " ", "T") + ".000Z"
+                
+                postdata_json = '{"type":"PostData"' +
+                               ',"entry_datetime":"' + entry_datetime + '"' +
+                               ',"symbol":"' + syminfo.tickerid + '"' +
+                               ',"timeframe":"' + timeframe.period + '"' +
+                               ',"side":"' + (is_long ? "long" : "short") + '"' +
+                               ',"maxATR":' + str.tostring(round3(max_atr)) +
+                               ',"barsUntilMaxATR":' + str.tostring(bars_to_max) +
+                               ',"minATR":' + str.tostring(round3(min_atr)) +
+                               ',"barsUntilMinATR":' + str.tostring(bars_to_min) +
+                               ',"exit_reason":"' + exit_reason + '"' +
+                               ',"signal_number":' + str.tostring(signal_num) + '}'
+                
+                array.push(completed_positions, postdata_json)
+                
+                // Remove from active tracking
+                array.remove(active_entry_prices, i)
+                array.remove(active_entry_atrs, i)
+                array.remove(active_is_long, i)
+                array.remove(active_entry_times, i)
+                array.remove(active_entry_bars, i)
+                array.remove(active_max_atr, i)
+                array.remove(active_min_atr, i)
+                array.remove(active_bars_to_max, i)
+                array.remove(active_bars_to_min, i)
+                array.remove(active_signal_nums, i)
         
         completed_positions
 
