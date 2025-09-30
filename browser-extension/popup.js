@@ -408,13 +408,47 @@ class TVDataCollectorUI {
     }
 }
 
+// Emergency fallback initialization
+if (!window.tvDataCollector) {
+    setTimeout(() => {
+        if (!window.tvDataCollector) {
+            console.log('🔄 Fallback initialization triggered');
+            try {
+                window.tvDataCollector = new TVDataCollectorUI();
+            } catch (error) {
+                console.error('Fallback init failed:', error);
+            }
+        }
+    }, 100);
+}
+
 // Initialize UI when popup loads
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('Popup DOM loaded, initializing UI...');
-    window.tvDataCollector = new TVDataCollectorUI();
+    console.log('🚀 Popup DOM loaded, initializing UI...');
     
-    // Add debugging info
-    console.log('TradingView Data Collector Popup initialized');
+    try {
+        window.tvDataCollector = new TVDataCollectorUI();
+        console.log('✅ TradingView Data Collector Popup initialized successfully');
+        
+        // Add visible confirmation
+        document.body.style.border = '2px solid #4CAF50';
+        setTimeout(() => {
+            if (document.body.style.border) {
+                document.body.style.border = '';
+            }
+        }, 1000);
+        
+    } catch (error) {
+        console.error('❌ Error initializing popup:', error);
+        document.body.innerHTML = `
+            <div style="padding: 20px; color: #f44336; background: #1e1e1e; font-family: monospace;">
+                <h3>Extension Error</h3>
+                <p>Failed to initialize: ${error.message}</p>
+                <button onclick="location.reload()">Retry</button>
+            </div>
+        `;
+        return;
+    }
     
     // Test if we're on TradingView
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
@@ -423,9 +457,10 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log('Current tab URL:', url);
             if (url.includes('tradingview.com')) {
                 console.log('✅ On TradingView - extension should work');
+                window.tvDataCollector?.updateStatus('✅ Ready on TradingView', 'success');
             } else {
                 console.log('❌ Not on TradingView - extension may not work');
-                window.tvDataCollector.updateStatus('Please navigate to TradingView first', 'warning');
+                window.tvDataCollector?.updateStatus('⚠️ Please navigate to TradingView first', 'warning');
             }
         }
     });

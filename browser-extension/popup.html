@@ -249,7 +249,8 @@
     <div class="drag-handle">≡ TradingView Data Collector</div>
     
     <div class="header">
-        <h1>TV Data Collector</h1>
+        <h1>🚀 TV Data Collector</h1>
+        <div id="loadStatus" style="font-size: 10px; color: #4CAF50;">✅ Popup Loaded</div>
     </div>
     
     <!-- Input Fields Section -->
@@ -357,6 +358,31 @@
     
     <div class="resize-handle"></div>
     
+    <!-- Immediate Test Script -->
+    <script>
+        console.log('🎯 Popup HTML loaded at:', new Date().toISOString());
+        
+        // Add immediate visual confirmation
+        document.addEventListener('DOMContentLoaded', () => {
+            console.log('🎯 Popup DOM ready');
+            const loadStatus = document.getElementById('loadStatus');
+            if (loadStatus) {
+                loadStatus.textContent = '✅ DOM Ready - ' + new Date().toLocaleTimeString();
+                loadStatus.style.color = '#4CAF50';
+            }
+            
+            // Test if Chrome APIs are available
+            if (typeof chrome !== 'undefined') {
+                console.log('🎯 Chrome APIs available in popup');
+            } else {
+                console.error('❌ Chrome APIs not available in popup');
+                if (loadStatus) {
+                    loadStatus.textContent = '❌ Chrome APIs missing';
+                    loadStatus.style.color = '#f44336';
+                }
+            }
+        });
+    </script>
     <script src="popup.js"></script>
 </body>
 </html>

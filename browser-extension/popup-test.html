@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        body {
+            width: 300px;
+            height: 200px;
+            background: #1e1e1e;
+            color: white;
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            margin: 0;
+        }
+        .test-btn {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px 0;
+            width: 100%;
+        }
+    </style>
+</head>
+<body>
+    <h2>🧪 Extension Test</h2>
+    <div id="status">Loading...</div>
+    <button class="test-btn" onclick="testChrome()">Test Chrome APIs</button>
+    <button class="test-btn" onclick="testTabs()">Test Current Tab</button>
+    <div id="results" style="font-size: 12px; margin-top: 10px;"></div>
+    
+    <script>
+        console.log('🧪 Minimal popup loaded');
+        
+        let results = document.getElementById('results');
+        let status = document.getElementById('status');
+        
+        function log(msg) {
+            console.log(msg);
+            results.innerHTML += '<div>' + msg + '</div>';
+        }
+        
+        // Immediate test
+        status.textContent = 'Popup Active ✅';
+        status.style.color = '#4CAF50';
+        
+        function testChrome() {
+            results.innerHTML = '';
+            log('Testing Chrome APIs...');
+            
+            if (typeof chrome !== 'undefined') {
+                log('✅ Chrome object exists');
+                log('Available: ' + Object.keys(chrome).join(', '));
+            } else {
+                log('❌ Chrome object missing');
+            }
+        }
+        
+        function testTabs() {
+            results.innerHTML = '';
+            log('Testing tabs API...');
+            
+            try {
+                chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
+                    if (tabs[0]) {
+                        log('✅ Current tab: ' + tabs[0].url);
+                    } else {
+                        log('❌ No active tab found');
+                    }
+                });
+            } catch (error) {
+                log('❌ Tabs API error: ' + error.message);
+            }
+        }
+        
+        // Auto test on load
+        setTimeout(() => {
+            testChrome();
+        }, 500);
+    </script>
+</body>
+</html>
