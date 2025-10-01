@@ -151,11 +151,14 @@ class TVPineLogsExtractor {
             
             // Process each symbol
             for (let i = 0; i < symbols.length && this.isCollecting; i++) {
-                this.currentSymbolIndex = i;
-                this.resetSymbolStopwatch();
-                await this.processSymbol(symbols[i], i);
-                
-                // Small delay between symbols
+        this.currentSymbolIndex = i;
+        this.resetSymbolStopwatch();
+        
+        // Reset replay mode flag for new symbol
+        this.isInReplayMode = false;
+        console.log(`[DEBUG] Starting new symbol, replay mode flag reset`);
+        
+        await this.processSymbol(symbols[i], i);                // Small delay between symbols
                 await this.sleep(1000);
             }
             
@@ -331,9 +334,19 @@ class TVPineLogsExtractor {
         }});
         
         try {
-            // Navigate to replay mode if needed
+            // Navigate to replay mode if needed (ONLY ONCE per symbol)
             if (dateRange.start || dateRange.end) {
-                await this.navigateToReplayMode();
+                if (!this.isInReplayMode) {
+                    console.log('[DEBUG] 🎬 Entering replay mode for first time this symbol');
+                    await this.navigateToReplayMode();
+                    this.isInReplayMode = true;
+                    console.log('[DEBUG] ✅ Replay mode now active, will stay active for all dates');
+                    await this.sleep(1000);
+                } else {
+                    console.log('[DEBUG] ⏭️ Already in replay mode, skipping activation (staying in replay)');
+                }
+                
+                // Set date for this iteration
                 await this.setReplayDate(dateRange.start);
                 await this.sleep(1000); // Wait for chart to load
             }
@@ -954,106 +967,86 @@ class TVPineLogsExtractor {
     }
     
     async navigateToSymbol(symbol) {
-        console.log(`Navigating to symbol: ${symbol}`);
+        console.log(`[DEBUG] 🎯 Navigating to symbol: ${symbol}`);
         
-        try {
-            // Method 1: Click symbol button to open search dialog
-            const symbolButton = document.querySelector('.chart-container [data-name="symbol-button"], [data-role="button"][class*="symbol"]');
-            if (symbolButton) {
-                console.log('[DEBUG] Found symbol button, clicking to open search...');
-                symbolButton.click();
-                await this.sleep(500);
-                
-                // Find the search input that appears
-                const searchInput = document.querySelector('input[placeholder*="Symbol"], input[placeholder*="Search"], input[data-role="search"]');
-                if (searchInput) {
-                    console.log('[DEBUG] Found search input, typing symbol:', symbol);
-                    searchInput.focus();
-                    searchInput.value = symbol;
-                    searchInput.dispatchEvent(new Event('input', { bubbles: true }));
-                    await this.sleep(300);
-                    
-                    // Press Enter to select
-                    const enterEvent = new KeyboardEvent('keydown', {
-                        key: 'Enter',
-                        code: 'Enter',
-                        keyCode: 13,
-                        bubbles: true,
-                        cancelable: true
-                    });
-                    searchInput.dispatchEvent(enterEvent);
-                    await this.sleep(1000);
+        // SIMPLIFIED METHOD: Just type the symbol anywhere and press ENTER
+        // TradingView has a global keyboard listener that catches symbol typing
+        console.log(`[DEBUG] Using keyboard typing method (works anywhere on page)`);
+        
+        return new Promise((resolve) => {
+            let charIndex = 0;
+            
+            function typeNextCharacter() {
+                if (charIndex >= symbol.length) {
+                    // Press Enter to confirm
+                    console.log(`[DEBUG] Typed complete symbol, pressing ENTER...`);
+                    setTimeout(() => {
+                        document.dispatchEvent(new KeyboardEvent('keydown', { 
+                            key: 'Enter',
+                            code: 'Enter',
+                            keyCode: 13,
+                            which: 13,
+                            bubbles: true, 
+                            cancelable: true 
+                        }));
+                        
+                        // Also try keypress and keyup for better compatibility
+                        document.dispatchEvent(new KeyboardEvent('keypress', { 
+                            key: 'Enter',
+                            code: 'Enter',
+                            keyCode: 13,
+                            which: 13,
+                            bubbles: true, 
+                            cancelable: true 
+                        }));
+                        
+                        document.dispatchEvent(new KeyboardEvent('keyup', { 
+                            key: 'Enter',
+                            code: 'Enter',
+                            keyCode: 13,
+                            which: 13,
+                            bubbles: true, 
+                            cancelable: true 
+                        }));
+                        
+                        console.log(`[DEBUG] ✅ Symbol change completed: ${symbol}`);
+                        setTimeout(resolve, 1500); // Wait for symbol to load
+                    }, 300);
                     return;
                 }
-            }
-            
-            // Method 2: Try direct symbol input fields
-            const symbolInputSelectors = [
-                'input[data-role="search"]',
-                'input[class*="symbol"]',
-                'input[placeholder*="symbol"]',
-                'input[placeholder*="Symbol"]',
-                '.symbol-input input',
-                '[class*="symbol-edit"] input'
-            ];
-            
-            for (const selector of symbolInputSelectors) {
-                const input = document.querySelector(selector);
-                if (input && this.isElementVisible(input)) {
-                    console.log(`[DEBUG] Found symbol input with selector: ${selector}`);
-                    input.focus();
-                    input.value = symbol;
-                    input.dispatchEvent(new Event('input', { bubbles: true }));
-                    input.dispatchEvent(new Event('change', { bubbles: true }));
-                    
-                    const enterEvent = new KeyboardEvent('keydown', {
-                        key: 'Enter',
-                        code: 'Enter',
-                        keyCode: 13,
-                        bubbles: true
-                    });
-                    input.dispatchEvent(enterEvent);
-                    await this.sleep(1000);
-                    return;
-                }
-            }
-            
-            // Method 3: Try keyboard shortcut to open symbol search (might be different per TradingView version)
-            console.log('[DEBUG] Trying keyboard shortcut for symbol search...');
-            document.dispatchEvent(new KeyboardEvent('keydown', {
-                key: 's',
-                code: 'KeyS',
-                ctrlKey: false,
-                altKey: false,
-                bubbles: true
-            }));
-            await this.sleep(500);
-            
-            const searchAfterShortcut = document.querySelector('input[data-role="search"], input[placeholder*="Symbol"]');
-            if (searchAfterShortcut) {
-                console.log('[DEBUG] Symbol search opened via shortcut');
-                searchAfterShortcut.focus();
-                searchAfterShortcut.value = symbol;
-                searchAfterShortcut.dispatchEvent(new Event('input', { bubbles: true }));
-                await this.sleep(300);
                 
-                const enterEvent = new KeyboardEvent('keydown', {
-                    key: 'Enter',
-                    code: 'Enter',
-                    keyCode: 13,
-                    bubbles: true
-                });
-                searchAfterShortcut.dispatchEvent(enterEvent);
-                await this.sleep(1000);
-                return;
+                const char = symbol[charIndex];
+                console.log(`[DEBUG] Typing char ${charIndex + 1}/${symbol.length}: '${char}'`);
+                
+                // Dispatch all keyboard events for maximum compatibility
+                document.dispatchEvent(new KeyboardEvent('keydown', {
+                    key: char,
+                    code: `Key${char.toUpperCase()}`,
+                    bubbles: true,
+                    cancelable: true
+                }));
+                
+                document.dispatchEvent(new KeyboardEvent('keypress', {
+                    key: char,
+                    code: `Key${char.toUpperCase()}`,
+                    bubbles: true,
+                    cancelable: true
+                }));
+                
+                document.dispatchEvent(new KeyboardEvent('keyup', {
+                    key: char,
+                    code: `Key${char.toUpperCase()}`,
+                    bubbles: true,
+                    cancelable: true
+                }));
+                
+                charIndex++;
+                setTimeout(typeNextCharacter, 150); // 150ms between characters
             }
             
-            console.warn('[DEBUG] Could not find symbol input after trying all methods');
-            console.warn('[DEBUG] Symbol may need to be changed manually or URL modification required');
-            
-        } catch (error) {
-            console.error('[DEBUG] Error navigating to symbol:', error);
-        }
+            console.log(`[DEBUG] Starting to type symbol character by character...`);
+            typeNextCharacter();
+        });
     }
     
     async navigateToReplayMode() {
@@ -1330,18 +1323,70 @@ class TVPineLogsExtractor {
         
         console.log(`[DOWNLOAD TRACE] Total collectedData size: ${this.collectedData.size}`);
         
-        // Filter entries for this symbol
-        const symbolEntries = new Map();
+        // Log all unique symbols in collected data for debugging
+        const allSymbols = new Set();
         for (const [key, entry] of this.collectedData) {
-            if (entry.symbol === symbol || entry.symbol.endsWith(`:${symbol}`)) {
+            if (entry.symbol) {
+                allSymbols.add(entry.symbol);
+            }
+        }
+        console.log(`[DOWNLOAD TRACE] All unique symbols in collectedData:`, Array.from(allSymbols));
+        console.log(`[DOWNLOAD TRACE] Looking for symbol: '${symbol}'`);
+        
+        // Extract ticker part for flexible matching
+        const ticker = symbol.includes(':') ? symbol.split(':')[1] : symbol;
+        console.log(`[DOWNLOAD TRACE] Ticker extracted: '${ticker}'`);
+        
+        // Filter entries for this symbol with multiple strategies
+        const symbolEntries = new Map();
+        let matchCount = 0;
+        
+        for (const [key, entry] of this.collectedData) {
+            let matched = false;
+            const entrySymbol = entry.symbol || '';
+            
+            // Strategy 1: Exact match
+            if (entrySymbol === symbol) {
+                matched = true;
+                console.log(`[DOWNLOAD TRACE] ✅ Exact match: '${entrySymbol}' === '${symbol}'`);
+            }
+            
+            // Strategy 2: Ends with ticker
+            if (!matched && entrySymbol.endsWith(`:${ticker}`)) {
+                matched = true;
+                console.log(`[DOWNLOAD TRACE] ✅ Ticker match: '${entrySymbol}' ends with ':${ticker}'`);
+            }
+            
+            // Strategy 3: Contains ticker
+            if (!matched && entrySymbol.includes(ticker)) {
+                matched = true;
+                console.log(`[DOWNLOAD TRACE] ✅ Contains match: '${entrySymbol}' contains '${ticker}'`);
+            }
+            
+            // Strategy 4: Normalized comparison (remove : and special chars)
+            if (!matched) {
+                const normalizedEntry = entrySymbol.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+                const normalizedSymbol = symbol.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+                if (normalizedEntry === normalizedSymbol) {
+                    matched = true;
+                    console.log(`[DOWNLOAD TRACE] ✅ Normalized match: '${entrySymbol}' => '${normalizedEntry}' === '${normalizedSymbol}'`);
+                }
+            }
+            
+            if (matched) {
                 symbolEntries.set(key, entry);
+                matchCount++;
+                if (matchCount <= 3) { // Log first 3 matches
+                    console.log(`[DOWNLOAD TRACE] Match #${matchCount}: Added entry with symbol '${entrySymbol}'`);
+                }
             }
         }
         
         console.log(`[DOWNLOAD TRACE] Filtered symbolEntries size: ${symbolEntries.size}`);
         
         if (symbolEntries.size === 0) {
-            console.log('[DOWNLOAD TRACE] No entries found for symbol after filter - ABORT');
+            console.error('[DOWNLOAD TRACE] ❌ No entries found for symbol after ALL filter strategies - ABORT');
+            console.error('[DOWNLOAD TRACE] This is a CRITICAL issue - data was collected but cannot be matched!');
             return;
         }
         
