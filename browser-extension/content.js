@@ -333,11 +333,18 @@ class TVPineLogsExtractor {
             // Navigate to replay mode if needed (ONLY ONCE per symbol)
             if (dateRange.start || dateRange.end) {
                 if (!this.isInReplayMode) {
-                    console.log('[DEBUG] 🎬 Entering replay mode for first time this symbol');
-                    await this.navigateToReplayMode();
-                    this.isInReplayMode = true;
-                    console.log('[DEBUG] ✅ Replay mode now active, will stay active for all dates');
-                    await this.sleep(1000);
+                    // Check if already in replay mode
+                    const replayButton = document.querySelector('button[aria-label*="Replay"][aria-pressed="true"]');
+                    if (replayButton) {
+                        console.log('[DEBUG] ✅ Already in replay mode (aria-pressed=true), skipping activation');
+                        this.isInReplayMode = true;
+                    } else {
+                        console.log('[DEBUG] 🎬 Entering replay mode for first time this symbol');
+                        await this.navigateToReplayMode();
+                        this.isInReplayMode = true;
+                        console.log('[DEBUG] ✅ Replay mode now active, will stay active for all dates');
+                        await this.sleep(1000);
+                    }
                 } else {
                     console.log('[DEBUG] ⏭️ Already in replay mode, skipping activation (staying in replay)');
                 }
@@ -405,8 +412,8 @@ class TVPineLogsExtractor {
             
             // Scroll speed will be read from UI on each iteration (can be changed live)
             const getScrollConfig = () => {
-                const scrollSpeedSelect = document.getElementById('scrollSpeed');
-                const scrollDelay = scrollSpeedSelect ? parseInt(scrollSpeedSelect.value) : 100;
+                const activePill = document.querySelector('.speed-pill.active-speed');
+                const scrollDelay = activePill ? parseInt(activePill.getAttribute('data-speed')) : 50;
                 const scrollIncrement = {
                     25: 10000,
                     50: 5000,
@@ -1739,7 +1746,7 @@ class TVPineLogsExtractor {
             <div id="floatingWindowContainer" style="
                 position: fixed;
                 bottom: 20px;
-                right: 220px;
+                right: 520px;
                 width: 380px;
                 min-height: 500px;
                 z-index: 999999;
@@ -1856,29 +1863,77 @@ class TVPineLogsExtractor {
                         </div>
                     </div>
                     
-                    <!-- Scroll Speed Selector -->
+                    <!-- Scroll Speed Pill Buttons -->
                     <div style="margin-bottom: 16px;">
-                        <label style="display: block; margin-bottom: 4px; font-size: 12px; color: #ccc;">Scroll Speed: <span id="currentSpeedLabel" style="color: #4CAF50; font-weight: bold;">Normal</span></label>
-                        <select id="scrollSpeed" style="
-                            width: 100%;
-                            padding: 6px;
-                            background: #2d2d2d;
-                            border: 1px solid #555;
-                            color: #fff;
-                            border-radius: 4px;
-                            font-size: 12px;
-                            box-sizing: border-box;
-                            cursor: pointer;
-                            position: relative;
-                            z-index: 1000;
-                        ">
-                            <option value="25">⚡ Very Fast (25ms, 10000px)</option>
-                            <option value="50">🚀 Fast (50ms, 5000px)</option>
-                            <option value="100" selected>⏩ Normal (100ms, 3000px)</option>
-                            <option value="200">🐢 Slow (200ms, 1000px)</option>
-                            <option value="500">🐌 Very Slow (500ms, 500px)</option>
-                        </select>
-                        <div style="font-size: 10px; color: #888; margin-top: 4px;">💡 Can be changed while scraping</div>
+                        <label style="display: block; margin-bottom: 8px; font-size: 12px; color: #ccc;">Scroll Speed: <span id="currentSpeedLabel" style="color: #4CAF50; font-weight: bold;">Fast</span></label>
+                        <div id="scrollSpeedButtons" style="display: flex; gap: 4px; flex-wrap: wrap;">
+                            <button class="speed-pill" data-speed="25" style="
+                                flex: 1;
+                                min-width: 70px;
+                                padding: 8px 4px;
+                                background: #2d2d2d;
+                                border: 1px solid #555;
+                                color: #fff;
+                                border-radius: 16px;
+                                font-size: 10px;
+                                cursor: pointer;
+                                transition: all 0.2s;
+                                text-align: center;
+                            " title="25ms delay, 10000px scroll">⚡ Very Fast</button>
+                            <button class="speed-pill active-speed" data-speed="50" style="
+                                flex: 1;
+                                min-width: 70px;
+                                padding: 8px 4px;
+                                background: #4CAF50;
+                                border: 1px solid #4CAF50;
+                                color: #fff;
+                                border-radius: 16px;
+                                font-size: 10px;
+                                cursor: pointer;
+                                transition: all 0.2s;
+                                text-align: center;
+                            " title="50ms delay, 5000px scroll">🚀 Fast</button>
+                            <button class="speed-pill" data-speed="100" style="
+                                flex: 1;
+                                min-width: 70px;
+                                padding: 8px 4px;
+                                background: #2d2d2d;
+                                border: 1px solid #555;
+                                color: #fff;
+                                border-radius: 16px;
+                                font-size: 10px;
+                                cursor: pointer;
+                                transition: all 0.2s;
+                                text-align: center;
+                            " title="100ms delay, 3000px scroll">⏩ Normal</button>
+                            <button class="speed-pill" data-speed="200" style="
+                                flex: 1;
+                                min-width: 70px;
+                                padding: 8px 4px;
+                                background: #2d2d2d;
+                                border: 1px solid #555;
+                                color: #fff;
+                                border-radius: 16px;
+                                font-size: 10px;
+                                cursor: pointer;
+                                transition: all 0.2s;
+                                text-align: center;
+                            " title="200ms delay, 1000px scroll">🐢 Slow</button>
+                            <button class="speed-pill" data-speed="500" style="
+                                flex: 1;
+                                min-width: 70px;
+                                padding: 8px 4px;
+                                background: #2d2d2d;
+                                border: 1px solid #555;
+                                color: #fff;
+                                border-radius: 16px;
+                                font-size: 10px;
+                                cursor: pointer;
+                                transition: all 0.2s;
+                                text-align: center;
+                            " title="500ms delay, 500px scroll">🐌 Very Slow</button>
+                        </div>
+                        <div style="font-size: 10px; color: #888; margin-top: 6px;">💡 Can be changed while scraping</div>
                     </div>
                     
                     <!-- Progress Display -->
@@ -2170,21 +2225,52 @@ class TVPineLogsExtractor {
             stopBtn.disabled = true;
         });
         
-        // Scroll speed selector - update label on change
-        const scrollSpeedSelect = document.getElementById('scrollSpeed');
+        // Scroll speed pill buttons - update on click
+        const speedPills = document.querySelectorAll('.speed-pill');
         const speedLabel = document.getElementById('currentSpeedLabel');
-        scrollSpeedSelect?.addEventListener('change', (e) => {
-            const speedNames = {
-                '25': 'Very Fast',
-                '50': 'Fast',
-                '100': 'Normal',
-                '200': 'Slow',
-                '500': 'Very Slow'
-            };
-            if (speedLabel) {
-                speedLabel.textContent = speedNames[e.target.value] || 'Normal';
-            }
-            console.log(`🔄 Scroll speed changed to: ${speedNames[e.target.value]} (${e.target.value}ms)`);
+        const speedNames = {
+            '25': 'Very Fast',
+            '50': 'Fast',
+            '100': 'Normal',
+            '200': 'Slow',
+            '500': 'Very Slow'
+        };
+        
+        speedPills.forEach(pill => {
+            pill.addEventListener('click', () => {
+                // Remove active class from all pills
+                speedPills.forEach(p => {
+                    p.classList.remove('active-speed');
+                    p.style.background = '#2d2d2d';
+                    p.style.border = '1px solid #555';
+                });
+                
+                // Add active class to clicked pill
+                pill.classList.add('active-speed');
+                pill.style.background = '#4CAF50';
+                pill.style.border = '1px solid #4CAF50';
+                
+                // Update label
+                const speed = pill.getAttribute('data-speed');
+                if (speedLabel) {
+                    speedLabel.textContent = speedNames[speed] || 'Normal';
+                }
+                
+                console.log(`🔄 Scroll speed changed to: ${speedNames[speed]} (${speed}ms)`);
+            });
+            
+            // Hover effect
+            pill.addEventListener('mouseenter', () => {
+                if (!pill.classList.contains('active-speed')) {
+                    pill.style.background = '#3d3d3d';
+                }
+            });
+            
+            pill.addEventListener('mouseleave', () => {
+                if (!pill.classList.contains('active-speed')) {
+                    pill.style.background = '#2d2d2d';
+                }
+            });
         });
         
         // Initialize stopwatches
