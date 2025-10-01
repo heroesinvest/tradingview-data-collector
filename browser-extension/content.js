@@ -24,8 +24,8 @@ class TVPineLogsExtractor {
         this.currentDateEntriesCount = 0;
         this.currentSymbolEntriesCount = 0;
         this.lastLoggedTime = null;
-        this.lastEntryType = null; // PreData or PostData
-        this.lastEntryDatetime = null; // Full datetime string
+        this.lastPreDataDatetime = null; // Last PreData datetime
+        this.lastPostDataDatetime = null; // Last PostData datetime
         
         this.init();
     }
@@ -246,20 +246,20 @@ class TVPineLogsExtractor {
             lastLogged.textContent = formatted;
         }
         
-        // Update last entry display
-        const lastEntryType = document.getElementById('lastEntryType');
-        const lastEntryDatetime = document.getElementById('lastEntryDatetime');
+        // Update last entry displays - separate PreData and PostData
+        const lastPreDataDatetime = document.getElementById('lastPreDataDatetime');
+        const lastPostDataDatetime = document.getElementById('lastPostDataDatetime');
         
-        if (lastEntryType && this.lastEntryType) {
-            lastEntryType.textContent = this.lastEntryType;
-            lastEntryType.style.color = this.lastEntryType === 'PreData' ? '#FF9800' : '#4CAF50';
+        if (lastPreDataDatetime && this.lastPreDataDatetime) {
+            const dt = new Date(this.lastPreDataDatetime);
+            const formatted = `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')} ${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`;
+            lastPreDataDatetime.textContent = formatted;
         }
         
-        if (lastEntryDatetime && this.lastEntryDatetime) {
-            // Format as yyyy-MM-dd HH:mm
-            const dt = new Date(this.lastEntryDatetime);
+        if (lastPostDataDatetime && this.lastPostDataDatetime) {
+            const dt = new Date(this.lastPostDataDatetime);
             const formatted = `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')} ${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`;
-            lastEntryDatetime.textContent = formatted;
+            lastPostDataDatetime.textContent = formatted;
         }
     }
     
@@ -668,10 +668,13 @@ class TVPineLogsExtractor {
                     this.currentDateEntriesCount++;
                     this.currentSymbolEntriesCount++;
                     
-                    // Track last entry info for display
+                    // Track last entry info for display - separate PreData and PostData
                     this.lastLoggedTime = parsedData.entry_datetime || parsedData.entry_date || parsedData.timestamp;
-                    this.lastEntryType = parsedData.type; // PreData or PostData
-                    this.lastEntryDatetime = parsedData.entry_datetime || parsedData.entry_date || parsedData.timestamp;
+                    if (parsedData.type === 'PreData') {
+                        this.lastPreDataDatetime = parsedData.entry_datetime || parsedData.timestamp;
+                    } else if (parsedData.type === 'PostData') {
+                        this.lastPostDataDatetime = parsedData.entry_datetime || parsedData.timestamp;
+                    }
                     
                     console.log(`[DEBUG] ✅ Successfully added entry #${entries.length}`);
                     
@@ -1537,16 +1540,30 @@ class TVPineLogsExtractor {
                         <span style="font-size: 18px; margin-right: 8px;">🚀</span>
                         <strong style="color: #4CAF50;">TV Data Collector</strong>
                     </div>
-                    <button id="minimizeWindow" style="
-                        background: #f44336;
-                        color: white;
-                        border: none;
-                        width: 24px;
-                        height: 24px;
-                        border-radius: 4px;
-                        cursor: pointer;
-                        font-size: 16px;
-                    ">×</button>
+                    <div style="display: flex; gap: 4px;">
+                        <button id="minimizeWindow" style="
+                            background: #FF9800;
+                            color: white;
+                            border: none;
+                            width: 24px;
+                            height: 24px;
+                            border-radius: 4px;
+                            cursor: pointer;
+                            font-size: 16px;
+                            line-height: 16px;
+                        " title="Minimize">_</button>
+                        <button id="maximizeWindow" style="
+                            background: #2196F3;
+                            color: white;
+                            border: none;
+                            width: 24px;
+                            height: 24px;
+                            border-radius: 4px;
+                            cursor: pointer;
+                            font-size: 14px;
+                            line-height: 14px;
+                        " title="Maximize/Restore">□</button>
+                    </div>
                 </div>
                 
                 <!-- Content -->
@@ -1674,12 +1691,22 @@ class TVPineLogsExtractor {
                         <div id="dateProgress" style="font-size: 16px; color: #888; font-weight: bold;">0/0</div>
                     </div>
                 </div>
-            </div>                        <!-- Last Entry Display - BIG -->
-                        <div style="margin-bottom: 8px; padding: 8px; background: #1a3a1a; border-radius: 4px; border-left: 3px solid #4CAF50;">
-                            <div style="font-size: 9px; color: #888; margin-bottom: 2px;">Last Entry</div>
-                            <div style="display: flex; justify-content: space-between; align-items: center;">
-                                <div id="lastEntryType" style="font-size: 16px; color: #4CAF50; font-weight: bold;">-</div>
-                                <div id="lastEntryDatetime" style="font-size: 14px; color: #81C784; font-family: monospace;">-</div>
+            </div>
+            
+                        <!-- Last Entry Displays - Separated PreData and PostData -->
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px;">
+                            <!-- PreData Last Entry -->
+                            <div style="padding: 8px; background: #3a2a1a; border-radius: 4px; border-left: 3px solid #FF9800;">
+                                <div style="font-size: 9px; color: #888; margin-bottom: 2px;">Last Entry</div>
+                                <div style="font-size: 14px; color: #FF9800; font-weight: bold; margin-bottom: 4px;">PreData</div>
+                                <div id="lastPreDataDatetime" style="font-size: 11px; color: #FFB74D; font-family: monospace;">-</div>
+                            </div>
+                            
+                            <!-- PostData Last Entry -->
+                            <div style="padding: 8px; background: #1a3a1a; border-radius: 4px; border-left: 3px solid #4CAF50;">
+                                <div style="font-size: 9px; color: #888; margin-bottom: 2px;">Last Entry</div>
+                                <div style="font-size: 14px; color: #4CAF50; font-weight: bold; margin-bottom: 4px;">PostData</div>
+                                <div id="lastPostDataDatetime" style="font-size: 11px; color: #81C784; font-family: monospace;">-</div>
                             </div>
                         </div>
                         
@@ -1806,8 +1833,56 @@ class TVPineLogsExtractor {
         // Minimize button
         const minimizeBtn = document.getElementById('minimizeWindow');
         minimizeBtn?.addEventListener('click', () => {
-            const window = document.getElementById('tvDataCollectorWindow');
-            if (window) window.style.display = 'none';
+            const window = document.getElementById('floatingWindowContainer');
+            if (window) {
+                window.style.display = 'none';
+            }
+        });
+        
+        // Maximize/Restore button
+        const maximizeBtn = document.getElementById('maximizeWindow');
+        let isMaximized = false;
+        let savedPosition = null;
+        
+        maximizeBtn?.addEventListener('click', () => {
+            const window = document.getElementById('floatingWindowContainer');
+            if (!window) return;
+            
+            if (!isMaximized) {
+                // Save current position and size
+                savedPosition = {
+                    top: window.style.top,
+                    left: window.style.left,
+                    bottom: window.style.bottom,
+                    right: window.style.right,
+                    width: window.style.width,
+                    height: window.style.height
+                };
+                
+                // Maximize
+                window.style.top = '10px';
+                window.style.left = '10px';
+                window.style.right = '10px';
+                window.style.bottom = '10px';
+                window.style.width = 'auto';
+                window.style.height = 'auto';
+                
+                maximizeBtn.textContent = '❐'; // Restore icon
+                isMaximized = true;
+            } else {
+                // Restore
+                if (savedPosition) {
+                    window.style.top = savedPosition.top;
+                    window.style.left = savedPosition.left;
+                    window.style.bottom = savedPosition.bottom;
+                    window.style.right = savedPosition.right;
+                    window.style.width = savedPosition.width;
+                    window.style.height = savedPosition.height;
+                }
+                
+                maximizeBtn.textContent = '□'; // Maximize icon
+                isMaximized = false;
+            }
         });
         
         // Start collection button
@@ -1917,6 +1992,19 @@ class TVPineLogsExtractor {
         
         function dragMouseDown(e) {
             e.preventDefault();
+            
+            // Convert bottom/right positioning to top/left before dragging
+            if (element.style.bottom !== '' && element.style.bottom !== 'auto') {
+                const rect = element.getBoundingClientRect();
+                element.style.top = rect.top + 'px';
+                element.style.bottom = 'auto';
+            }
+            if (element.style.right !== '' && element.style.right !== 'auto') {
+                const rect = element.getBoundingClientRect();
+                element.style.left = rect.left + 'px';
+                element.style.right = 'auto';
+            }
+            
             pos3 = e.clientX;
             pos4 = e.clientY;
             document.onmouseup = closeDragElement;
@@ -1931,7 +2019,6 @@ class TVPineLogsExtractor {
             pos4 = e.clientY;
             element.style.top = (element.offsetTop - pos2) + 'px';
             element.style.left = (element.offsetLeft - pos1) + 'px';
-            element.style.right = 'auto'; // Disable right positioning while dragging
         }
         
         function closeDragElement() {
