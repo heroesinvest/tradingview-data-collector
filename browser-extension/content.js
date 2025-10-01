@@ -307,17 +307,13 @@ class TVPineLogsExtractor {
         console.log(`[DOWNLOAD TRACE] Total collectedData size: ${this.collectedData.size}`);
         console.log(`[DOWNLOAD TRACE] Symbol data before: ${symbolDataBefore}, after: ${symbolDataAfter}`);
         
-        if (entriesThisSymbol > 0) {
-            console.log(`💾 [DOWNLOAD TRACE] Initiating download for ${symbol}...`);
-            try {
-                await this.saveCollectedDataForSymbol(symbol);
-                console.log(`✅ [DOWNLOAD TRACE] Download completed for ${symbol}`);
-            } catch (error) {
-                console.error(`❌ [DOWNLOAD TRACE] Download FAILED for ${symbol}:`, error);
-                console.error('[DOWNLOAD TRACE] Error stack:', error.stack);
-            }
-        } else {
-            console.warn(`⚠️ No entries collected for ${symbol} - SKIP DOWNLOAD`);
+        // ALWAYS download, even if empty (helps debugging)
+        console.log(`💾 Initiating download for ${symbol} (${entriesThisSymbol} entries)...`);
+        try {
+            await this.saveCollectedDataForSymbol(symbol, entriesThisSymbol);
+            console.log(`✅ Download completed for ${symbol}`);
+        } catch (error) {
+            console.error(`❌ Download FAILED for ${symbol}:`, error);
         }
     }
     
@@ -457,7 +453,7 @@ class TVPineLogsExtractor {
                 
                 if (newEntries.length === 0) {
                     consecutiveNoNewEntries++;
-                    console.log(`[DEBUG] No new entries (stable count: ${consecutiveNoNewEntries}/${maxConsecutiveNoNewEntries})`);
+                    // Reduced logging - only log at end
                     
                     // Check if we've reached the bottom
                     const isAtBottom = (viewport.scrollTop + viewport.clientHeight) >= (viewport.scrollHeight - 100);
@@ -493,8 +489,8 @@ class TVPineLogsExtractor {
                 // Configurable delay between scrolls
                 await this.sleep(scrollDelay);
                 
-                // Log progress every 10 scrolls
-                if (scrollAttempts % 10 === 0) {
+                // Log progress every 50 scrolls (reduced verbosity)
+                if (scrollAttempts % 50 === 0) {
                     console.log(`[PROGRESS] Scroll ${scrollAttempts}/${maxScrollAttempts}, entries: ${entries.length}, scroll: ${Math.round(viewport.scrollTop)}/${viewport.scrollHeight}`);
                 }
             }
@@ -967,58 +963,88 @@ class TVPineLogsExtractor {
     }
     
     async navigateToSymbol(symbol) {
-        console.log(`[DEBUG] 🎯 Navigating to symbol: ${symbol}`);
+        console.log(`🔄 Changing symbol to: ${symbol}`);
         
-        // SIMPLIFIED METHOD: Just type the symbol anywhere and press ENTER
-        // TradingView has a global keyboard listener that catches symbol typing
-        console.log(`[DEBUG] Using keyboard typing method (works anywhere on page)`);
+        // CORRECTED METHOD: First open symbol search dialog, THEN type
+        // Step 1: Try to open symbol search dialog
+        let dialogOpened = false;
         
+        // Method 1: Try TradingViewApi
+        if (window.TradingViewApi) {
+            try {
+                const executeMethods = [
+                    () => window.TradingViewApi.executeActionById && window.TradingViewApi.executeActionById('symbolSearch'),
+                    () => window.TradingViewApi.activeChart && window.TradingViewApi.activeChart().executeActionById('symbolSearch')
+                ];
+                
+                for (const method of executeMethods) {
+                    try {
+                        const result = method();
+                        if (result !== false && result !== undefined) {
+                            console.log('📂 Symbol search opened via TradingViewApi');
+                            dialogOpened = true;
+                            break;
+                        }
+                    } catch (e) { /* ignore */ }
+                }
+            } catch (e) { /* ignore */ }
+        }
+        
+        // Method 2: Try clicking symbol button
+        if (!dialogOpened) {
+            const symbolButtons = document.querySelectorAll('[data-name="legend-source-item"], .chart-markup-table .symbol-title-wrapper, button[aria-label*="symbol"]');
+            for (const btn of symbolButtons) {
+                if (btn.offsetParent !== null) {
+                    btn.click();
+                    console.log('📂 Symbol search opened via button click');
+                    dialogOpened = true;
+                    break;
+                }
+            }
+        }
+        
+        // Method 3: Try Ctrl+K keyboard shortcut
+        if (!dialogOpened) {
+            document.dispatchEvent(new KeyboardEvent('keydown', {
+                key: 'k',
+                code: 'KeyK',
+                keyCode: 75,
+                ctrlKey: true,
+                bubbles: true,
+                cancelable: true
+            }));
+            console.log('📂 Symbol search triggered via Ctrl+K');
+            dialogOpened = true;
+        }
+        
+        // Wait for dialog to open
+        await this.sleep(800);
+        
+        // Step 2: Type the symbol character by character
         return new Promise((resolve) => {
             let charIndex = 0;
             
             function typeNextCharacter() {
                 if (charIndex >= symbol.length) {
                     // Press Enter to confirm
-                    console.log(`[DEBUG] Typed complete symbol, pressing ENTER...`);
                     setTimeout(() => {
                         document.dispatchEvent(new KeyboardEvent('keydown', { 
                             key: 'Enter',
                             code: 'Enter',
                             keyCode: 13,
-                            which: 13,
                             bubbles: true, 
                             cancelable: true 
                         }));
                         
-                        // Also try keypress and keyup for better compatibility
-                        document.dispatchEvent(new KeyboardEvent('keypress', { 
-                            key: 'Enter',
-                            code: 'Enter',
-                            keyCode: 13,
-                            which: 13,
-                            bubbles: true, 
-                            cancelable: true 
-                        }));
-                        
-                        document.dispatchEvent(new KeyboardEvent('keyup', { 
-                            key: 'Enter',
-                            code: 'Enter',
-                            keyCode: 13,
-                            which: 13,
-                            bubbles: true, 
-                            cancelable: true 
-                        }));
-                        
-                        console.log(`[DEBUG] ✅ Symbol change completed: ${symbol}`);
-                        setTimeout(resolve, 1500); // Wait for symbol to load
+                        console.log(`✅ Symbol changed to: ${symbol}`);
+                        setTimeout(resolve, 2000); // Wait longer for symbol to load
                     }, 300);
                     return;
                 }
                 
                 const char = symbol[charIndex];
-                console.log(`[DEBUG] Typing char ${charIndex + 1}/${symbol.length}: '${char}'`);
                 
-                // Dispatch all keyboard events for maximum compatibility
+                // Dispatch keyboard events for character
                 document.dispatchEvent(new KeyboardEvent('keydown', {
                     key: char,
                     code: `Key${char.toUpperCase()}`,
@@ -1028,23 +1054,20 @@ class TVPineLogsExtractor {
                 
                 document.dispatchEvent(new KeyboardEvent('keypress', {
                     key: char,
-                    code: `Key${char.toUpperCase()}`,
                     bubbles: true,
                     cancelable: true
                 }));
                 
                 document.dispatchEvent(new KeyboardEvent('keyup', {
                     key: char,
-                    code: `Key${char.toUpperCase()}`,
                     bubbles: true,
                     cancelable: true
                 }));
                 
                 charIndex++;
-                setTimeout(typeNextCharacter, 150); // 150ms between characters
+                setTimeout(typeNextCharacter, 100); // 100ms between characters
             }
             
-            console.log(`[DEBUG] Starting to type symbol character by character...`);
             typeNextCharacter();
         });
     }
@@ -1312,16 +1335,9 @@ class TVPineLogsExtractor {
         console.log(`[setReplayDate] Date set to ${date} and confirmed with Enter`);
     }
     
-    async saveCollectedDataForSymbol(symbol) {
-        console.log(`[DOWNLOAD TRACE] saveCollectedDataForSymbol called for: ${symbol}`);
-        
-        // Save data for specific symbol only
-        if (this.collectedData.size === 0) {
-            console.log('[DOWNLOAD TRACE] No data in collectedData - ABORT');
-            return;
-        }
-        
-        console.log(`[DOWNLOAD TRACE] Total collectedData size: ${this.collectedData.size}`);
+    async saveCollectedDataForSymbol(symbol, expectedCount) {
+        console.log(`💾 Saving data for: ${symbol}`);
+        console.log(`📊 Total collectedData entries: ${this.collectedData.size}`);
         
         // Log all unique symbols in collected data for debugging
         const allSymbols = new Set();
@@ -1330,8 +1346,8 @@ class TVPineLogsExtractor {
                 allSymbols.add(entry.symbol);
             }
         }
-        console.log(`[DOWNLOAD TRACE] All unique symbols in collectedData:`, Array.from(allSymbols));
-        console.log(`[DOWNLOAD TRACE] Looking for symbol: '${symbol}'`);
+        console.log(`🔍 Symbols found in logs: ${Array.from(allSymbols).join(', ')}`);
+        console.log(`🎯 Looking for: ${symbol}`);
         
         // Extract ticker part for flexible matching
         const ticker = symbol.includes(':') ? symbol.split(':')[1] : symbol;
@@ -1384,9 +1400,25 @@ class TVPineLogsExtractor {
         
         console.log(`[DOWNLOAD TRACE] Filtered symbolEntries size: ${symbolEntries.size}`);
         
+        // ALWAYS create and download the file, even if empty (for debugging)
         if (symbolEntries.size === 0) {
-            console.error('[DOWNLOAD TRACE] ❌ No entries found for symbol after ALL filter strategies - ABORT');
-            console.error('[DOWNLOAD TRACE] This is a CRITICAL issue - data was collected but cannot be matched!');
+            console.warn('⚠️ No entries matched for symbol - creating empty file for debugging');
+            console.warn(`⚠️ Expected: ${symbol}, Found in logs: ${Array.from(allSymbols).join(', ')}`);
+            
+            // Create empty file with debug info
+            const debugData = [{
+                error: "No matching entries found",
+                expected_symbol: symbol,
+                found_symbols: Array.from(allSymbols),
+                message: "Symbol in logs does not match requested symbol. Symbol may not have changed."
+            }];
+            
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+            const safeTicker = symbol.split(':').pop().replace(/[^a-zA-Z0-9]/g, '_');
+            const debugFileName = `${safeTicker}-ERROR-${timestamp}.json`;
+            
+            await this.downloadJSONFile(debugFileName, debugData);
+            console.log(`📥 Downloaded debug file: ${debugFileName}`);
             return;
         }
         
@@ -1707,7 +1739,7 @@ class TVPineLogsExtractor {
             <div id="floatingWindowContainer" style="
                 position: fixed;
                 bottom: 20px;
-                right: 20px;
+                right: 220px;
                 width: 380px;
                 min-height: 500px;
                 z-index: 999999;
@@ -2025,12 +2057,55 @@ class TVPineLogsExtractor {
             }
         });
         
-        // Minimize button
+        // Minimize button - creates a floating restore button
         const minimizeBtn = document.getElementById('minimizeWindow');
         minimizeBtn?.addEventListener('click', () => {
             const window = document.getElementById('floatingWindowContainer');
             if (window) {
                 window.style.display = 'none';
+                
+                // Create mini restore button
+                let restoreBtn = document.getElementById('tvDataCollectorRestoreBtn');
+                if (!restoreBtn) {
+                    restoreBtn = document.createElement('button');
+                    restoreBtn.id = 'tvDataCollectorRestoreBtn';
+                    restoreBtn.innerHTML = '🚀 TV';
+                    restoreBtn.style.cssText = `
+                        position: fixed;
+                        bottom: 20px;
+                        right: 20px;
+                        width: 60px;
+                        height: 60px;
+                        z-index: 999999;
+                        background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
+                        color: white;
+                        border: 2px solid #fff;
+                        border-radius: 50%;
+                        cursor: pointer;
+                        font-size: 18px;
+                        font-weight: bold;
+                        box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+                        transition: all 0.3s ease;
+                    `;
+                    restoreBtn.title = 'Restore TV Data Collector';
+                    
+                    restoreBtn.addEventListener('mouseenter', () => {
+                        restoreBtn.style.transform = 'scale(1.1)';
+                        restoreBtn.style.boxShadow = '0 6px 16px rgba(76, 175, 80, 0.6)';
+                    });
+                    
+                    restoreBtn.addEventListener('mouseleave', () => {
+                        restoreBtn.style.transform = 'scale(1)';
+                        restoreBtn.style.boxShadow = '0 4px 12px rgba(0,0,0,0.5)';
+                    });
+                    
+                    restoreBtn.addEventListener('click', () => {
+                        window.style.display = 'flex';
+                        restoreBtn.remove();
+                    });
+                    
+                    document.body.appendChild(restoreBtn);
+                }
             }
         });
         
