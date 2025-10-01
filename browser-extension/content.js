@@ -301,12 +301,20 @@ class TVPineLogsExtractor {
         const entriesThisSymbol = symbolDataAfter - symbolDataBefore;
         
         console.log(`\n📊 Symbol ${symbol} complete: ${entriesThisSymbol} entries collected`);
+        console.log(`[DOWNLOAD TRACE] Total collectedData size: ${this.collectedData.size}`);
+        console.log(`[DOWNLOAD TRACE] Symbol data before: ${symbolDataBefore}, after: ${symbolDataAfter}`);
         
         if (entriesThisSymbol > 0) {
-            console.log(`💾 Downloading JSON for ${symbol}...`);
-            await this.saveCollectedDataForSymbol(symbol);
+            console.log(`💾 [DOWNLOAD TRACE] Initiating download for ${symbol}...`);
+            try {
+                await this.saveCollectedDataForSymbol(symbol);
+                console.log(`✅ [DOWNLOAD TRACE] Download completed for ${symbol}`);
+            } catch (error) {
+                console.error(`❌ [DOWNLOAD TRACE] Download FAILED for ${symbol}:`, error);
+                console.error('[DOWNLOAD TRACE] Error stack:', error.stack);
+            }
         } else {
-            console.warn(`⚠️ No entries collected for ${symbol}`);
+            console.warn(`⚠️ No entries collected for ${symbol} - SKIP DOWNLOAD`);
         }
     }
     
@@ -458,6 +466,14 @@ class TVPineLogsExtractor {
                 
                 // Scroll down (get current config from UI - can be changed live)
                 const { scrollDelay, scrollIncrement } = getScrollConfig();
+                
+                // CRITICAL: Pause scrolling if user has speed dropdown open
+                if (this.isSpeedDropdownOpen()) {
+                    console.log('[DEBUG] ⏸️ Speed dropdown is open - pausing scroll to allow user interaction');
+                    await this.sleep(2000); // Wait 2 seconds for user to make selection
+                    continue; // Skip this scroll cycle
+                }
+                
                 await this.scrollVirtualList(viewport, scrollIncrement);
                 scrollAttempts++;
                 
@@ -581,6 +597,7 @@ class TVPineLogsExtractor {
         }
         
         // Quaternary: Look for standard virtual list classes (but validate they scroll)
+        console.log('[DEBUG] Trying virtual list selectors...');
         const virtualSelectors = [
             '.list-L0IhqRpX',
             '.virtualScroll-L0IhqRpX', 
@@ -591,13 +608,18 @@ class TVPineLogsExtractor {
         
         for (const selector of virtualSelectors) {
             const element = logsPanel.querySelector(selector);
-            if (element && element.scrollHeight > element.clientHeight + 100) {
-                console.log(`[DEBUG] Found virtual list using selector: ${selector}`);
-                return element;
+            if (element) {
+                const virtualScrollable = element.scrollHeight > element.clientHeight + 100;
+                console.log(`[DEBUG] Checking ${selector}: scrollHeight=${element.scrollHeight}, clientHeight=${element.clientHeight}, scrollable=${virtualScrollable}`);
+                if (virtualScrollable) {
+                    console.log(`[DEBUG] ✅ Found virtual list: ${selector}`);
+                    return element;
+                }
             }
         }
         
-        console.log('[DEBUG] No scrollable viewport found, using Pine logs widget as fallback');
+        console.warn('[DEBUG] ⚠️ No scrollable viewport found, using Pine logs widget as fallback');
+        console.warn('[DEBUG] ⚠️ Scrolling may NOT WORK - virtual list may not load new items!');
         return logsPanel;
     }
     
@@ -1041,38 +1063,39 @@ class TVPineLogsExtractor {
         await this.activatePineLogsWidget();
         
         // Enhanced replay button search with more specific selectors
-        // Based on TradingView HTML reference structure
+        // CRITICAL: Exclude speed button (10x dropdown) from selection
         const replaySelectors = [
             // Specific replay bar button
             '[data-name="replay"]',
             'button[data-name="replay"]',
-            '[aria-label*="Replay"]',
-            '[aria-label*="replay"]',
+            '[aria-label*="Replay"][aria-label*="mode"]', // Must contain "mode" to avoid speed button
             
             // Chart control buttons
-            '.chart-controls button[title*="Replay"]',
-            '.chart-controls button[title*="replay"]',
+            '.chart-controls button[title*="Replay"][title*="mode"]',
             
-            // Toolbar replay buttons
-            '[class*="toolbar"] button[class*="replay"]',
-            'div[data-role="button"][title*="Replay"]',
-            
-            // Generic fallbacks
-            'button[title*="replay"]',
-            'button[title*="Replay"]',
-            '[class*="replay"][role="button"]',
-            '[data-test-id="replay-button"]',
-            
-            // SVG icon based (replay icons often use SVG)
-            'button:has(svg[class*="replay"])',
-            'button:has([class*="replay-icon"])'
+            // Toolbar replay buttons (but not speed controls)
+            '[class*="toolbar"] button[class*="replay"]:not([class*="speed"])',
+            'div[data-role="button"][title*="Replay"][title*="mode"]'
         ];
         
         for (const selector of replaySelectors) {
             try {
                 const button = document.querySelector(selector);
                 if (button && this.isElementVisible(button)) {
-                    console.log(`[DEBUG] Found visible replay button with selector: ${selector}`);
+                    // Additional validation: button should NOT contain speed indicators
+                    const text = button.textContent?.toLowerCase() || '';
+                    const title = button.getAttribute('title')?.toLowerCase() || '';
+                    const ariaLabel = button.getAttribute('aria-label')?.toLowerCase() || '';
+                    
+                    // Skip if this is a speed button
+                    if (text.includes('×') || text.includes('x') || 
+                        title.includes('speed') || ariaLabel.includes('speed') ||
+                        text.match(/\d+x/)) {
+                        console.log(`[DEBUG] Skipping speed button with selector: ${selector}`);
+                        continue;
+                    }
+                    
+                    console.log(`[DEBUG] Found valid replay mode button with selector: ${selector}`);
                     button.click();
                     await this.sleep(2000);
                     return;
@@ -1083,16 +1106,21 @@ class TVPineLogsExtractor {
             }
         }
         
-        // Try finding by text content
+        // Try finding by text content (exclude speed buttons)
         const allButtons = document.querySelectorAll('button, div[role="button"], [data-role="button"]');
         for (const button of allButtons) {
             const text = button.textContent?.toLowerCase() || '';
             const title = button.getAttribute('title')?.toLowerCase() || '';
             const ariaLabel = button.getAttribute('aria-label')?.toLowerCase() || '';
             
-            if ((text.includes('replay') || title.includes('replay') || ariaLabel.includes('replay')) && 
-                this.isElementVisible(button)) {
-                console.log('[DEBUG] Found replay button by text/attribute search');
+            // Must contain 'replay' but NOT speed indicators
+            const hasReplay = text.includes('replay') || title.includes('replay') || ariaLabel.includes('replay');
+            const isSpeedButton = text.includes('×') || text.includes('speed') || 
+                                  title.includes('speed') || ariaLabel.includes('speed') ||
+                                  text.match(/\d+x/) || text === '10x' || text === '7x' || text === '5x';
+            
+            if (hasReplay && !isSpeedButton && this.isElementVisible(button)) {
+                console.log('[DEBUG] Found replay mode button by text/attribute search (excluding speed)');
                 button.click();
                 await this.sleep(2000);
                 return;
@@ -1111,6 +1139,33 @@ class TVPineLogsExtractor {
                style.opacity !== '0' &&
                element.offsetWidth > 0 &&
                element.offsetHeight > 0;
+    }
+    
+    isSpeedDropdownOpen() {
+        // Check if replay speed dropdown is currently open
+        // This prevents our scrolling from interfering with user speed selection
+        const dropdownSelectors = [
+            '[class*="menu"][class*="open"]',
+            '[class*="dropdown"][class*="open"]',
+            '[role="menu"][style*="display: block"]',
+            '[data-name="replay-speed-menu"]',
+            '.replay-speed-dropdown.open'
+        ];
+        
+        for (const selector of dropdownSelectors) {
+            const dropdown = document.querySelector(selector);
+            if (dropdown && this.isElementVisible(dropdown)) {
+                // Additional check: dropdown should contain speed options
+                const hasSpeedOptions = dropdown.textContent.includes('×') || 
+                                       dropdown.textContent.includes('upd per') ||
+                                       dropdown.textContent.match(/\d+x/);
+                if (hasSpeedOptions) {
+                    return true;
+                }
+            }
+        }
+        
+        return false;
     }
     
     async activatePineLogsWidget() {
@@ -1265,11 +1320,15 @@ class TVPineLogsExtractor {
     }
     
     async saveCollectedDataForSymbol(symbol) {
+        console.log(`[DOWNLOAD TRACE] saveCollectedDataForSymbol called for: ${symbol}`);
+        
         // Save data for specific symbol only
         if (this.collectedData.size === 0) {
-            console.log('No data to save for symbol:', symbol);
+            console.log('[DOWNLOAD TRACE] No data in collectedData - ABORT');
             return;
         }
+        
+        console.log(`[DOWNLOAD TRACE] Total collectedData size: ${this.collectedData.size}`);
         
         // Filter entries for this symbol
         const symbolEntries = new Map();
@@ -1279,24 +1338,31 @@ class TVPineLogsExtractor {
             }
         }
         
+        console.log(`[DOWNLOAD TRACE] Filtered symbolEntries size: ${symbolEntries.size}`);
+        
         if (symbolEntries.size === 0) {
-            console.log('No entries found for symbol:', symbol);
+            console.log('[DOWNLOAD TRACE] No entries found for symbol after filter - ABORT');
             return;
         }
         
         // Group data by symbol for file naming
+        console.log('[DOWNLOAD TRACE] Calling groupEntriesForSaving...');
         const groupedData = this.groupEntriesForSaving(symbolEntries);
+        console.log(`[DOWNLOAD TRACE] Grouped into ${Object.keys(groupedData).length} file(s)`);
         
         // Save each file (usually just 1 per symbol)
         for (const [fileName, data] of Object.entries(groupedData)) {
+            console.log(`[DOWNLOAD TRACE] Preparing to download: ${fileName} with ${data.length} entries`);
             await this.downloadJSONFile(fileName, data);
-            console.log(`📥 Downloaded: ${fileName} (${data.length} entries)`);
+            console.log(`📥 [DOWNLOAD TRACE] Download initiated: ${fileName} (${data.length} entries)`);
         }
         
         // Remove saved entries from collection to free memory
+        console.log(`[DOWNLOAD TRACE] Cleaning up ${symbolEntries.size} entries from memory`);
         for (const key of symbolEntries.keys()) {
             this.collectedData.delete(key);
         }
+        console.log(`[DOWNLOAD TRACE] Memory cleanup complete, remaining entries: ${this.collectedData.size}`);
     }
     
     async saveCollectedData() {
@@ -1437,24 +1503,38 @@ class TVPineLogsExtractor {
     }
     
     async downloadJSONFile(fileName, data) {
+        console.log(`[DOWNLOAD TRACE] downloadJSONFile START: ${fileName}`);
         try {
+            console.log(`[DOWNLOAD TRACE] Stringifying JSON data (${data.length} entries)...`);
             const jsonString = JSON.stringify(data, null, 2);
+            const byteSize = new Blob([jsonString]).size;
+            console.log(`[DOWNLOAD TRACE] JSON size: ${(byteSize / 1024).toFixed(2)} KB`);
+            
             const blob = new Blob([jsonString], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
+            console.log(`[DOWNLOAD TRACE] Blob URL created: ${url.substring(0, 50)}...`);
             
             // Use Chrome Downloads API
+            console.log(`[DOWNLOAD TRACE] Sending download message to background script...`);
             chrome.runtime.sendMessage({
                 type: 'download',
                 data: {
                     url: url,
                     filename: fileName
                 }
+            }, (response) => {
+                console.log(`[DOWNLOAD TRACE] Background response:`, response);
             });
             
-            console.log(`Initiated download for: ${fileName}`);
+            console.log(`✅ [DOWNLOAD TRACE] Download message sent for: ${fileName}`);
+            
+            // Wait a bit to ensure download starts
+            await this.sleep(500);
             
         } catch (error) {
-            console.error(`Error downloading file ${fileName}:`, error);
+            console.error(`❌ [DOWNLOAD TRACE] CRITICAL ERROR downloading ${fileName}:`, error);
+            console.error('[DOWNLOAD TRACE] Error stack:', error.stack);
+            console.error('[DOWNLOAD TRACE] Data sample:', JSON.stringify(data.slice(0, 2), null, 2));
         }
     }
     
