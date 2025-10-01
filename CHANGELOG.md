@@ -1,5 +1,70 @@
 # Changelog - TradingView Data Collector
 
+## 2025-10-01 - UI Improvements
+
+### 🎨 Separate PreData/PostData Last Entry Displays
+**Problema:** Havia apenas um campo "Last Entry" que alternava entre PreData e PostData, dificultando acompanhar ambos os tipos simultaneamente.
+
+**Solução:** 
+```
+┌─────────────────────┬─────────────────────┐
+│  Last Entry         │  Last Entry         │
+│  PreData            │  PostData           │
+│  2022-12-30 10:00  │  2022-12-30 10:15  │
+└─────────────────────┴─────────────────────┘
+```
+- Dois campos lado a lado (grid 1fr 1fr)
+- **PreData**: Fundo marrom (#3a2a1a), borda laranja (#FF9800)
+- **PostData**: Fundo verde escuro (#1a3a1a), borda verde (#4CAF50)
+- Atualização independente conforme cada tipo é coletado
+
+### 🖱️ Fix Drag Issue - Window Stuck at Bottom
+**Problema:** Ao tentar arrastar a janela, ela ficava com o `bottom` preso e redimensionava ao invés de mover.
+
+**Causa Raiz:** A janela era posicionada com `bottom: 20px` e `right: 20px`, e o drag não convertia para `top/left`.
+
+**Solução:**
+```javascript
+function dragMouseDown(e) {
+    // Converter bottom/right para top/left ANTES de iniciar drag
+    if (element.style.bottom && element.style.bottom !== 'auto') {
+        const rect = element.getBoundingClientRect();
+        element.style.top = rect.top + 'px';
+        element.style.bottom = 'auto';
+    }
+    if (element.style.right && element.style.right !== 'auto') {
+        const rect = element.getBoundingClientRect();
+        element.style.left = rect.left + 'px';
+        element.style.right = 'auto';
+    }
+    // ... continua drag normalmente
+}
+```
+
+**Resultado:** Janela agora pode ser arrastada livremente por toda a tela.
+
+### 🔲 Replace Close Button with Minimize/Maximize
+**Problema:** Botão X (close) vermelho fechava a janela, exigindo Ctrl+Shift+T para reabrir.
+
+**Solução:** Dois botões na barra de título:
+```
+┌──────────────────────────────┐
+│ 🚀 TV Data Collector  [_][□] │ ← Minimize (laranja) e Maximize (azul)
+└──────────────────────────────┘
+```
+
+**Funcionalidades:**
+- **Minimize (_)**: 
+  - Cor: Laranja (#FF9800)
+  - Ação: `display: none` na janela
+  - Reabrir: Ctrl+Shift+T
+  
+- **Maximize (□)**: 
+  - Cor: Azul (#2196F3)
+  - Maximizado: `top/left/right/bottom: 10px` (tela cheia com margem)
+  - Restaurado: Volta para posição/tamanho salvos
+  - Ícone muda para ❐ quando maximizado
+
 ## 2025-10-01 - Critical Fixes
 
 ### 🔧 Date Filtering Removed
