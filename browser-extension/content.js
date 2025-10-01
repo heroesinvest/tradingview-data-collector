@@ -264,7 +264,9 @@ class TVPineLogsExtractor {
     }
     
     async processSymbol(symbol, symbolIndex) {
-        console.log(`Processing symbol ${symbolIndex + 1}/${this.currentConfig.symbols.length}: ${symbol}`);
+        console.log(`\n${'='.repeat(60)}`);
+        console.log(`📊 Processing symbol ${symbolIndex + 1}/${this.currentConfig.symbols.length}: ${symbol}`);
+        console.log(`${'='.repeat(60)}\n`);
         
         this.sendMessage({ type: 'symbolStarted', data: { 
             symbol: symbol,
@@ -273,18 +275,21 @@ class TVPineLogsExtractor {
         
         // Navigate to symbol if needed
         if (this.currentConfig.symbols.length > 1) {
+            console.log(`🔄 Navigating to symbol: ${symbol}...`);
             await this.navigateToSymbol(symbol);
             await this.sleep(2000); // Wait for page to load
         }
         
         // Reset symbol-specific data collection
         const symbolDataBefore = this.collectedData.size;
+        console.log(`📝 Symbol data before: ${symbolDataBefore} entries`);
         
         // Process each date range for this symbol (usually just 1)
         for (let dateIndex = 0; dateIndex < this.dateList.length && this.isCollecting; dateIndex++) {
             this.currentDateIndex = dateIndex;
             const dateRange = this.dateList[dateIndex];
             
+            console.log(`\n📅 Processing date ${dateIndex + 1}/${this.dateList.length}: ${dateRange.start}`);
             await this.processDateRange(symbol, dateRange, dateIndex);
             
             // Small delay between dates
@@ -295,8 +300,10 @@ class TVPineLogsExtractor {
         const symbolDataAfter = this.collectedData.size;
         const entriesThisSymbol = symbolDataAfter - symbolDataBefore;
         
+        console.log(`\n📊 Symbol ${symbol} complete: ${entriesThisSymbol} entries collected`);
+        
         if (entriesThisSymbol > 0) {
-            console.log(`✅ Collected ${entriesThisSymbol} entries for ${symbol}. Downloading JSON now...`);
+            console.log(`💾 Downloading JSON for ${symbol}...`);
             await this.saveCollectedDataForSymbol(symbol);
         } else {
             console.warn(`⚠️ No entries collected for ${symbol}`);
@@ -672,9 +679,14 @@ class TVPineLogsExtractor {
                     this.lastLoggedTime = parsedData.entry_datetime || parsedData.entry_date || parsedData.timestamp;
                     if (parsedData.type === 'PreData') {
                         this.lastPreDataDatetime = parsedData.entry_datetime || parsedData.timestamp;
+                        console.log(`[DEBUG] ✅ PreData found: ${this.lastPreDataDatetime}`);
                     } else if (parsedData.type === 'PostData') {
                         this.lastPostDataDatetime = parsedData.entry_datetime || parsedData.timestamp;
+                        console.log(`[DEBUG] ✅ PostData found: ${this.lastPostDataDatetime}`);
                     }
+                    
+                    // Update UI immediately (LIVE updates)
+                    this.updateProgressDisplay();
                     
                     console.log(`[DEBUG] ✅ Successfully added entry #${entries.length}`);
                     
@@ -1318,33 +1330,91 @@ class TVPineLogsExtractor {
             
             const groupKey = `${ticker}-${timeframe}`;
             if (!symbolGroups[groupKey]) {
-                symbolGroups[groupKey] = [];
+                symbolGroups[groupKey] = { preData: [], postData: [] };
             }
-            symbolGroups[groupKey].push(entry);
+            
+            // Separate PreData and PostData
+            if (entry.type === 'PreData') {
+                symbolGroups[groupKey].preData.push(entry);
+            } else if (entry.type === 'PostData') {
+                symbolGroups[groupKey].postData.push(entry);
+            }
         }
         
-        // Create files with date range in name: {ticker}-{timeframe}-{firstDateTime}-{lastDateTime}.json
-        for (const [groupKey, entries] of Object.entries(symbolGroups)) {
-            // Sort by timestamp
-            entries.sort((a, b) => {
-                const timeA = new Date(a.entry_datetime || a.timestamp || 0);
-                const timeB = new Date(b.entry_datetime || b.timestamp || 0);
+        // Create merged entries: PreData + PostData matched by entry_datetime
+        for (const [groupKey, groups] of Object.entries(symbolGroups)) {
+            const { preData, postData } = groups;
+            const mergedEntries = [];
+            
+            // Create index of PostData by entry_datetime for fast lookup
+            const postDataMap = new Map();
+            postData.forEach(post => {
+                const key = `${post.entry_datetime || post.timestamp}|${post.symbol}|${post.timeframe}|${post.side}`;
+                postDataMap.set(key, post);
+            });
+            
+            // Merge PreData with matching PostData
+            preData.forEach(pre => {
+                const matchKey = `${pre.entry_datetime || pre.timestamp}|${pre.symbol}|${pre.timeframe}|${pre.side}`;
+                const matchingPost = postDataMap.get(matchKey);
+                
+                // Create merged object
+                const merged = {
+                    entry_datetime: pre.entry_datetime || pre.timestamp,
+                    symbol: pre.symbol,
+                    timeframe: pre.timeframe,
+                    side: pre.side,
+                    preData: {},
+                    postData: matchingPost ? {} : null
+                };
+                
+                // Copy PreData fields (excluding metadata)
+                Object.keys(pre).forEach(key => {
+                    if (!['type', 'entry_datetime', 'symbol', 'timeframe', 'side', 'timestamp'].includes(key)) {
+                        merged.preData[key] = pre[key];
+                    }
+                });
+                
+                // Copy PostData fields if exists
+                if (matchingPost) {
+                    Object.keys(matchingPost).forEach(key => {
+                        if (!['type', 'entry_datetime', 'symbol', 'timeframe', 'side', 'timestamp'].includes(key)) {
+                            merged.postData[key] = matchingPost[key];
+                        }
+                    });
+                    // Mark as used
+                    postDataMap.delete(matchKey);
+                }
+                
+                mergedEntries.push(merged);
+            });
+            
+            // Warn about orphan PostData (shouldn't happen)
+            if (postDataMap.size > 0) {
+                console.warn(`⚠️ Found ${postDataMap.size} PostData without matching PreData for ${groupKey}`);
+            }
+            
+            // Sort merged entries by entry_datetime
+            mergedEntries.sort((a, b) => {
+                const timeA = new Date(a.entry_datetime);
+                const timeB = new Date(b.entry_datetime);
                 return timeA - timeB;
             });
             
-            // Get first and last timestamps
-            const firstEntry = entries[0];
-            const lastEntry = entries[entries.length - 1];
+            if (mergedEntries.length === 0) continue;
             
-            const firstTime = new Date(firstEntry.entry_datetime || firstEntry.timestamp);
-            const lastTime = new Date(lastEntry.entry_datetime || lastEntry.timestamp);
+            // Get first and last timestamps
+            const firstTime = new Date(mergedEntries[0].entry_datetime);
+            const lastTime = new Date(mergedEntries[mergedEntries.length - 1].entry_datetime);
             
             const firstDateStr = this.formatDateForFilename(firstTime);
             const lastDateStr = this.formatDateForFilename(lastTime);
             
             // Filename format: {ticker}-{timeframe}-{firstDateTime}-{lastDateTime}.json
             const fileName = `${groupKey}-${firstDateStr}-${lastDateStr}.json`;
-            grouped[fileName] = entries;
+            grouped[fileName] = mergedEntries;
+            
+            console.log(`📊 Merged ${groupKey}: ${preData.length} PreData + ${postData.length} PostData = ${mergedEntries.length} entries`);
         }
         
         return grouped;
