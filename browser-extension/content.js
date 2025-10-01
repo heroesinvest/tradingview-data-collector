@@ -287,16 +287,28 @@ class TVPineLogsExtractor {
         const symbolDataBefore = this.collectedData.size;
         console.log(`📝 Symbol data before: ${symbolDataBefore} entries`);
         
-        // Process each date range for this symbol (usually just 1)
+        // Process each date range for this symbol
+        console.log(`[DEBUG] Processing ${this.dateList.length} dates for symbol ${symbol}`);
+        
         for (let dateIndex = 0; dateIndex < this.dateList.length && this.isCollecting; dateIndex++) {
             this.currentDateIndex = dateIndex;
             const dateRange = this.dateList[dateIndex];
             
             console.log(`\n📅 Processing date ${dateIndex + 1}/${this.dateList.length}: ${dateRange.start}`);
-            await this.processDateRange(symbol, dateRange, dateIndex);
             
-            // Small delay between dates
-            await this.sleep(500);
+            try {
+                await this.processDateRange(symbol, dateRange, dateIndex);
+                console.log(`✅ Date ${dateRange.start} complete`);
+            } catch (error) {
+                console.error(`❌ Error processing date ${dateRange.start}:`, error);
+                // Continue to next date even if one fails
+            }
+            
+            // Delay between dates to allow UI to update
+            if (dateIndex < this.dateList.length - 1) {
+                console.log(`⏳ Waiting 2 seconds before next date...`);
+                await this.sleep(2000);
+            }
         }
         
         // CRITICAL: Download JSON for this symbol IMMEDIATELY before moving to next symbol
@@ -947,23 +959,85 @@ class TVPineLogsExtractor {
     
     generateEntryKey(data) {
         // Create unique key for deduplication
-        return `${data.type}|${data.symbol}|${data.timeframe}|${data.entry_datetime || data.timestamp}|${data.side || ''}`;
+        // Key includes: type (PreData/PostData), symbol, timeframe, entry_datetime, and side
+        const type = data.type || 'unknown';
+        const symbol = data.symbol || 'unknown';
+        const timeframe = data.timeframe || 'unknown';
+        const entryDateTime = data.entry_datetime || data.timestamp || 'unknown';
+        const side = data.side || data.signal_side || '';
+        
+        return `${type}|${symbol}|${timeframe}|${entryDateTime}|${side}`;
     }
     
     generateDateList(startDate, endDate) {
-        // Simplified: Collect ONCE per symbol using start date as reference
-        // All data will be collected in a single pass through the Pine Logs
-        // No need for multiple date iterations - replay mode shows all historical data
+        const dates = [];
         
         if (!startDate && !endDate) {
-            // No date specified - collect current live data without replay mode
+            // No dates specified, return empty array (use current live data)
             return [{ start: null, end: null }];
         }
         
-        // If any date is specified, use startDate for replay mode entry point
-        // This gives us access to all historical data in Pine Logs
-        const replayDate = startDate || endDate;
-        return [{ start: replayDate, end: null }];
+        if (startDate && !endDate) {
+            // Only start date specified
+            return [{ start: startDate, end: null }];
+        }
+        
+        if (!startDate && endDate) {
+            // Only end date specified
+            return [{ start: endDate, end: null }];
+        }
+        
+        // Both dates specified - generate year-end date stepping (treating as UTC)
+        const start = new Date(startDate + 'T00:00:00.000Z');
+        const end = new Date(endDate + 'T23:59:59.999Z');
+        
+        // Always add the start date first
+        dates.push({ start: this.formatDate(start), end: null });
+        console.log(`[DEBUG] Date generation: Added start date: ${this.formatDate(start)}`);
+        
+        // Now iterate through year-ends
+        let currentYear = start.getUTCFullYear();
+        const endYear = end.getUTCFullYear();
+        
+        console.log(`[DEBUG] Date generation: Iterating from year ${currentYear} to ${endYear}`);
+        
+        while (currentYear <= endYear) {
+            const endOfYear = new Date(Date.UTC(currentYear, 11, 31)); // December 31st UTC
+            const endOfYearStr = this.formatDate(endOfYear);
+            const endDateStr = this.formatDate(end);
+            
+            console.log(`[DEBUG] Date generation: Year ${currentYear}, endOfYear=${endOfYearStr}, endDate=${endDateStr}`);
+            
+            // Check if we should add the end-of-year for this year
+            if (endOfYear > start && endOfYear < end) {
+                // End-of-year is between start and end (not including end date itself)
+                dates.push({ start: endOfYearStr, end: null });
+                console.log(`[DEBUG] Date generation: ✅ Added year-end ${endOfYearStr} (before end date)`);
+            } else if (endOfYear > start && endOfYearStr === endDateStr) {
+                // End-of-year IS the end date
+                dates.push({ start: endOfYearStr, end: null });
+                console.log(`[DEBUG] Date generation: ✅ Added year-end ${endOfYearStr} (equals end date)`);
+            }
+            
+            // If this is the last year and end date is not Dec 31, add the end date
+            if (currentYear === endYear && endOfYearStr !== endDateStr) {
+                dates.push({ start: endDateStr, end: null });
+                console.log(`[DEBUG] Date generation: ✅ Added end date ${endDateStr} (final date)`);
+            }
+            
+            currentYear++;
+        }
+        
+        console.log(`[DEBUG] Date generation: Generated ${dates.length} dates for range ${startDate} to ${endDate}:`, dates.map(d => d.start));
+        return dates;
+    }
+    
+    formatDate(date) {
+        // Format date as YYYY-MM-DD using UTC
+        const year = date.getUTCFullYear();
+        const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+        const day = String(date.getUTCDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
     }
     
     getCurrentSymbol() {
@@ -989,111 +1063,163 @@ class TVPineLogsExtractor {
     async navigateToSymbol(symbol) {
         console.log(`🔄 Changing symbol to: ${symbol}`);
         
-        // CORRECTED METHOD: First open symbol search dialog, THEN type
-        // Step 1: Try to open symbol search dialog
-        let dialogOpened = false;
-        
-        // Method 1: Try TradingViewApi
-        if (window.TradingViewApi) {
-            try {
-                const executeMethods = [
-                    () => window.TradingViewApi.executeActionById && window.TradingViewApi.executeActionById('symbolSearch'),
-                    () => window.TradingViewApi.activeChart && window.TradingViewApi.activeChart().executeActionById('symbolSearch')
-                ];
-                
-                for (const method of executeMethods) {
-                    try {
-                        const result = method();
-                        if (result !== false && result !== undefined) {
-                            console.log('📂 Symbol search opened via TradingViewApi');
-                            dialogOpened = true;
-                            break;
-                        }
-                    } catch (e) { /* ignore */ }
-                }
-            } catch (e) { /* ignore */ }
-        }
-        
-        // Method 2: Try clicking symbol button
-        if (!dialogOpened) {
-            const symbolButtons = document.querySelectorAll('[data-name="legend-source-item"], .chart-markup-table .symbol-title-wrapper, button[aria-label*="symbol"]');
-            for (const btn of symbolButtons) {
-                if (btn.offsetParent !== null) {
-                    btn.click();
-                    console.log('📂 Symbol search opened via button click');
-                    dialogOpened = true;
+        try {
+            // Step 1: Find and click the Symbol Search button or use Ctrl+K
+            console.log('[SYMBOL] Step 1: Opening symbol search dialog...');
+            
+            const symbolSearchSelectors = [
+                '[data-name*="symbol"][data-name*="search" i]',
+                '[aria-label*="Symbol Search" i]',
+                '[class*="symbol"][class*="search" i] [role="button"]',
+                '[data-name="symbol-search-button"]',
+                '.tv-header__symbol-search-container button',
+                'button[title*="Symbol Search"]'
+            ];
+            
+            let searchButton = null;
+            for (const selector of symbolSearchSelectors) {
+                const btn = document.querySelector(selector);
+                if (btn && btn.offsetParent !== null) {
+                    searchButton = btn;
+                    console.log(`[SYMBOL] Found symbol search button: ${selector}`);
                     break;
                 }
             }
-        }
-        
-        // Method 3: Try Ctrl+K keyboard shortcut
-        if (!dialogOpened) {
-            document.dispatchEvent(new KeyboardEvent('keydown', {
-                key: 'k',
-                code: 'KeyK',
-                keyCode: 75,
-                ctrlKey: true,
-                bubbles: true,
-                cancelable: true
-            }));
-            console.log('📂 Symbol search triggered via Ctrl+K');
-            dialogOpened = true;
-        }
-        
-        // Wait for dialog to open
-        await this.sleep(800);
-        
-        // Step 2: Type the symbol character by character
-        return new Promise((resolve) => {
-            let charIndex = 0;
             
-            function typeNextCharacter() {
-                if (charIndex >= symbol.length) {
-                    // Press Enter to confirm
-                    setTimeout(() => {
-                        document.dispatchEvent(new KeyboardEvent('keydown', { 
-                            key: 'Enter',
-                            code: 'Enter',
-                            keyCode: 13,
-                            bubbles: true, 
-                            cancelable: true 
-                        }));
-                        
-                        console.log(`✅ Symbol changed to: ${symbol}`);
-                        setTimeout(resolve, 2000); // Wait longer for symbol to load
-                    }, 300);
+            if (!searchButton) {
+                console.log('[SYMBOL] Button not found, trying Ctrl+K shortcut...');
+                document.dispatchEvent(new KeyboardEvent('keydown', {
+                    key: 'k',
+                    ctrlKey: true,
+                    bubbles: true,
+                    cancelable: true
+                }));
+            } else {
+                searchButton.click();
+            }
+            
+            // Step 2: Wait for the dialog and input to appear
+            console.log('[SYMBOL] Step 2: Waiting for dialog to appear...');
+            
+            const dialog = await this.waitForElement('[role="dialog"]', document, 5000);
+            console.log('[SYMBOL] Dialog found, waiting for input...');
+            
+            const input = await this.waitForElement('input[type="text"]', dialog, 5000);
+            console.log('[SYMBOL] Input found');
+            
+            // Step 3: Set the symbol value using React-safe method
+            console.log(`[SYMBOL] Step 3: Setting value to "${symbol}"...`);
+            
+            const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+            valueSetter.call(input, symbol);
+            
+            // Trigger input event for React
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            console.log(`[SYMBOL] Symbol "${symbol}" entered in search input`);
+            
+            // Step 4: Wait for search results and click the best match
+            console.log('[SYMBOL] Step 4: Waiting for search results...');
+            
+            const bestMatch = await this.findBestSymbolMatch(dialog, symbol);
+            
+            if (bestMatch) {
+                console.log('[SYMBOL] Found matching result, clicking...');
+                bestMatch.click();
+                console.log(`✅ Symbol changed to ${symbol}`);
+                await this.sleep(2000); // Wait for chart to update
+            } else {
+                throw new Error(`No search results found for symbol: ${symbol}`);
+            }
+            
+        } catch (error) {
+            console.error(`[SYMBOL] ❌ Failed to change symbol: ${error.message}`);
+            throw error;
+        }
+    }
+    
+    // Helper: Wait for element to appear
+    async waitForElement(selector, root = document, timeout = 5000) {
+        return new Promise((resolve, reject) => {
+            const startTime = performance.now();
+            const interval = setInterval(() => {
+                const element = root.querySelector(selector);
+                if (element) {
+                    clearInterval(interval);
+                    resolve(element);
+                } else if (performance.now() - startTime > timeout) {
+                    clearInterval(interval);
+                    reject(new Error(`Timeout waiting for: ${selector}`));
+                }
+            }, 50);
+        });
+    }
+    
+    // Helper: Find best matching symbol in search results
+    async findBestSymbolMatch(dialog, symbol) {
+        return new Promise((resolve) => {
+            const startTime = performance.now();
+            const interval = setInterval(() => {
+                // First try exact data-symbol match
+                const exactMatch = dialog.querySelector(`[data-symbol="${symbol}"]`);
+                if (exactMatch) {
+                    clearInterval(interval);
+                    resolve(exactMatch);
                     return;
                 }
                 
-                const char = symbol[charIndex];
+                // Then try finding in all possible result elements
+                const resultSelectors = [
+                    '[data-symbol]',
+                    '[role="row"]',
+                    '[class*="item"]',
+                    '[class*="result"]',
+                    '.tv-screener-table__result-row'
+                ];
                 
-                // Dispatch keyboard events for character
-                document.dispatchEvent(new KeyboardEvent('keydown', {
-                    key: char,
-                    code: `Key${char.toUpperCase()}`,
-                    bubbles: true,
-                    cancelable: true
-                }));
+                for (const selector of resultSelectors) {
+                    const elements = Array.from(dialog.querySelectorAll(selector));
+                    const match = elements.find(el => {
+                        const text = (el.textContent || '').toUpperCase();
+                        const symbolUpper = symbol.toUpperCase();
+                        return text.includes(symbolUpper) || 
+                               text.replace(/[:\s]/g, '') === symbolUpper.replace(/[:\s]/g, '');
+                    });
+                    if (match) {
+                        clearInterval(interval);
+                        resolve(match);
+                        return;
+                    }
+                }
                 
-                document.dispatchEvent(new KeyboardEvent('keypress', {
-                    key: char,
-                    bubbles: true,
-                    cancelable: true
-                }));
-                
-                document.dispatchEvent(new KeyboardEvent('keyup', {
-                    key: char,
-                    bubbles: true,
-                    cancelable: true
-                }));
-                
-                charIndex++;
-                setTimeout(typeNextCharacter, 100); // 100ms between characters
-            }
-            
-            typeNextCharacter();
+                // Timeout: take first available result as fallback
+                if (performance.now() - startTime > 4000) {
+                    clearInterval(interval);
+                    const fallback = dialog.querySelector('[data-symbol], [role="row"], [class*="item"]');
+                    resolve(fallback);
+                }
+            }, 75);
         });
+    }
+    
+    // Helper method to get proper key code for a character
+    getKeyCode(char) {
+        const upperChar = char.toUpperCase();
+        
+        // Special characters
+        if (char === ':') return 'Semicolon';
+        if (char === '.') return 'Period';
+        if (char === '-') return 'Minus';
+        if (char === '_') return 'Underscore';
+        if (char === ' ') return 'Space';
+        
+        // Numbers
+        if (char >= '0' && char <= '9') return `Digit${char}`;
+        
+        // Letters
+        if (upperChar >= 'A' && upperChar <= 'Z') return `Key${upperChar}`;
+        
+        // Default
+        return `Key${upperChar}`;
     }
     
     async navigateToReplayMode() {
@@ -1249,70 +1375,218 @@ class TVPineLogsExtractor {
     async setReplayDate(date) {
         if (!date) return;
         
-        console.log(`Setting replay date to: ${date}`);
+        console.log(`[DEBUG] Starting navigation to date: ${date}`);
         
-        // Step 1: Find the "Select date" button using TradingView's structure
-        // Look for: <div class="selectDateBar__button-*"> with text "Select date"
-        let dateButton = null;
+        // First, check if replay mode is already active
+        const replayButton = document.querySelector('[aria-label*="Replay"][aria-pressed="true"], button[aria-pressed="true"][aria-label*="Replay"]');
+        const isReplayActive = replayButton && (
+            replayButton.getAttribute('aria-pressed') === 'true' ||
+            replayButton.classList.contains('active') ||
+            replayButton.classList.contains('selected')
+        );
         
-        // Try to find button by text content "Select date"
-        const allButtons = document.querySelectorAll('div[data-role="button"], button');
-        for (const btn of allButtons) {
-            const textEl = btn.querySelector('.js-button-text');
-            const buttonText = textEl ? textEl.textContent : btn.textContent;
-            if (buttonText && buttonText.includes('Select date') && this.isElementVisible(btn)) {
-                dateButton = btn;
-                console.log('[setReplayDate] Found "Select date" button');
-                break;
+        if (isReplayActive) {
+            console.log('[DEBUG] ✅ Replay mode already active, going directly to date selection');
+            await this.selectDate(date);
+        } else {
+            console.log('[DEBUG] Replay mode not active, activating first...');
+            // First, activate replay mode
+            await this.activateReplayModeIfNeeded();
+            await this.sleep(1500); // Wait for replay mode to fully activate
+            await this.selectDate(date);
+        }
+    }
+    
+    async activateReplayModeIfNeeded() {
+        console.log('[DEBUG] Starting replay mode activation...');
+        
+        // Try multiple selectors for the replay button
+        const replaySelectors = [
+            '[aria-label="Bar Replay"]',
+            '#header-toolbar-replay',
+            'button[data-tooltip="Bar Replay"]',
+            'button[aria-label*="Replay"][aria-pressed]',
+            'button[data-name="replay"]'
+        ];
+        
+        let replayButton = null;
+        for (const selector of replaySelectors) {
+            const buttons = document.querySelectorAll(selector);
+            console.log(`[DEBUG] Found ${buttons.length} elements for selector: ${selector}`);
+            
+            for (const button of buttons) {
+                if (button.offsetParent !== null) { // Check if visible
+                    replayButton = button;
+                    console.log(`[DEBUG] Found visible replay button with selector: ${selector}`);
+                    break;
+                }
             }
+            if (replayButton) break;
         }
         
-        // Fallback selectors
-        if (!dateButton) {
-            const fallbackSelectors = [
-                '[class*="selectDateBar__button"]',
-                '[class*="selectDateBar"] [data-role="button"]',
-                '.controls__control_type_selectBar [data-role="button"]'
-            ];
-            
-            for (const selector of fallbackSelectors) {
-                const buttons = document.querySelectorAll(selector);
-                for (const btn of buttons) {
-                    if (this.isElementVisible(btn)) {
-                        dateButton = btn;
-                        console.log(`[setReplayDate] Found button using: ${selector}`);
+        if (!replayButton) {
+            console.log('[DEBUG] No replay button found, searching in entire document...');
+            // Search for any button containing "replay" text
+            const allButtons = document.querySelectorAll('button');
+            for (const button of allButtons) {
+                const text = button.textContent.toLowerCase();
+                const ariaLabel = (button.getAttribute('aria-label') || '').toLowerCase();
+                const tooltip = (button.getAttribute('data-tooltip') || '').toLowerCase();
+                
+                if (text.includes('replay') || ariaLabel.includes('replay') || tooltip.includes('replay')) {
+                    console.log(`[DEBUG] Found potential replay button: ${button.outerHTML.substring(0, 100)}...`);
+                    if (button.offsetParent !== null) {
+                        replayButton = button;
                         break;
                     }
                 }
-                if (dateButton) break;
             }
         }
         
-        if (!dateButton) {
-            console.warn('[setReplayDate] Replay date button not found');
-            return;
+        if (!replayButton) {
+            throw new Error('Replay button not found after exhaustive search');
         }
         
-        // Step 2: Click button to open date picker
-        console.log('[setReplayDate] Clicking date selection button');
-        dateButton.click();
-        await this.sleep(800); // Wait for date picker to open
+        console.log(`[DEBUG] Using replay button: ${replayButton.outerHTML.substring(0, 200)}...`);
         
-        // Step 3: Find date input with placeholder="YYYY-MM-DD"
+        // Check if replay mode is already active
+        const isActive = replayButton.getAttribute('aria-pressed') === 'true' ||
+                        replayButton.classList.contains('active') ||
+                        replayButton.classList.contains('selected');
+        
+        console.log(`[DEBUG] Replay mode currently active: ${isActive}`);
+        
+        if (!isActive) {
+            console.log('[DEBUG] Activating replay mode...');
+            
+            // Ensure button is visible and clickable
+            replayButton.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            await this.sleep(500);
+            
+            // Click the button
+            console.log('[DEBUG] Clicking replay button...');
+            replayButton.click();
+            
+            // Also dispatch mouse events as backup
+            const clickEvent = new MouseEvent('click', {
+                view: window,
+                bubbles: true,
+                cancelable: true,
+                clientX: replayButton.getBoundingClientRect().left + 10,
+                clientY: replayButton.getBoundingClientRect().top + 10
+            });
+            replayButton.dispatchEvent(clickEvent);
+            
+            await this.sleep(1000);
+            
+            // Verify replay mode is now active
+            const isNowActive = replayButton.getAttribute('aria-pressed') === 'true' ||
+                              replayButton.classList.contains('active');
+            
+            if (isNowActive) {
+                console.log('[DEBUG] ✅ Replay mode successfully activated');
+            } else {
+                console.log('[DEBUG] ⚠️ Replay mode activation uncertain, continuing...');
+            }
+        } else {
+            console.log('[DEBUG] ✅ Replay mode already active');
+        }
+    }
+    
+    async selectDate(date) {
+        console.log(`[DEBUG] Starting date selection for: ${date}`);
+        
+        // Wait a bit for replay mode to be fully active
+        await this.sleep(1000);
+        
+        console.log('[DEBUG] Searching for select date button...');
+        
+        // Try multiple selectors for the "Select date" button
+        const selectDateSelectors = [
+            '[class*="selectDateBar__button"]',
+            '[data-role="button"]:has(.js-button-text)',
+            'div[data-role="button"]',
+            '.controls__control_type_selectBar [data-role="button"]'
+        ];
+        
+        let selectDateBtn = null;
+        for (const selector of selectDateSelectors) {
+            const buttons = document.querySelectorAll(selector);
+            console.log(`[DEBUG] Found ${buttons.length} elements for selector: ${selector}`);
+            
+            for (const button of buttons) {
+                if (button.offsetParent !== null) { // Check if visible
+                    selectDateBtn = button;
+                    console.log(`[DEBUG] Found visible select date button with selector: ${selector}`);
+                    break;
+                }
+            }
+            if (selectDateBtn) break;
+        }
+        
+        // Also try finding by text content
+        if (!selectDateBtn) {
+            console.log('[DEBUG] Searching by text content...');
+            const buttons = document.querySelectorAll('[data-role="button"], button, .button');
+            for (const btn of buttons) {
+                const text = btn.textContent.toLowerCase();
+                if ((text.includes('select date') || text.includes('date')) && btn.offsetParent !== null) {
+                    console.log(`[DEBUG] Found potential date button: ${btn.outerHTML.substring(0, 100)}...`);
+                    selectDateBtn = btn;
+                    break;
+                }
+            }
+        }
+        
+        if (!selectDateBtn) {
+            throw new Error('Select date button not found after exhaustive search');
+        }
+        
+        console.log(`[DEBUG] Using select date button: ${selectDateBtn.outerHTML.substring(0, 200)}...`);
+        console.log('[DEBUG] Clicking select date button...');
+        
+        // Ensure button is visible
+        selectDateBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        await this.sleep(500);
+        
+        // Click the select date button
+        selectDateBtn.click();
+        
+        // Also dispatch mouse events as backup
+        const clickEvent = new MouseEvent('click', {
+            view: window,
+            bubbles: true,
+            cancelable: true
+        });
+        selectDateBtn.dispatchEvent(clickEvent);
+        
+        await this.sleep(1500); // Wait for date picker to appear
+        
+        console.log('[DEBUG] Looking for date input field...');
+        await this.fillDateInput(date);
+    }
+    
+    async fillDateInput(date) {
+        console.log(`[DEBUG] Filling date input with: ${date}`);
+        
+        // Try multiple selectors for date input
         const dateInputSelectors = [
             'input[placeholder="YYYY-MM-DD"]',
             'input[data-qa-id="ui-lib-Input-input"]',
-            'input[class*="input-"][class*="size-small"]',
+            'input[class*="input-"]',
             'input[type="text"][placeholder*="YYYY"]',
-            'input[type="date"]'
+            'input[value][placeholder*="YYYY"]'
         ];
         
         let dateInput = null;
         for (const selector of dateInputSelectors) {
             const inputs = document.querySelectorAll(selector);
+            console.log(`[DEBUG] Found ${inputs.length} inputs for selector: ${selector}`);
+            
             for (const input of inputs) {
-                if (this.isElementVisible(input)) {
+                if (input.offsetHeight > 0 && input.offsetParent !== null) {
                     dateInput = input;
+                    console.log(`[DEBUG] Found visible date input with selector: ${selector}`);
                     break;
                 }
             }
@@ -1320,43 +1594,59 @@ class TVPineLogsExtractor {
         }
         
         if (!dateInput) {
-            console.warn('[setReplayDate] Date input not found after clicking button');
-            return;
+            throw new Error('Date input field not found');
         }
         
-        // Step 4: Set date value
-        console.log('[setReplayDate] Setting date input value');
+        console.log('[DEBUG] Filling date input with:', date);
+        
+        // Focus the input first
         dateInput.focus();
-        dateInput.value = date;
+        
+        // Clear existing value
+        dateInput.value = '';
         dateInput.dispatchEvent(new Event('input', { bubbles: true }));
-        dateInput.dispatchEvent(new Event('change', { bubbles: true }));
+        
         await this.sleep(300);
         
-        // Step 5: Press Enter key to confirm (THIS WAS MISSING)
-        console.log('[setReplayDate] Pressing Enter to confirm date');
+        // Set the new value
+        dateInput.value = date;
+        
+        // Dispatch multiple events to ensure TradingView recognizes the change
+        dateInput.dispatchEvent(new Event('input', { bubbles: true }));
+        dateInput.dispatchEvent(new Event('change', { bubbles: true }));
+        dateInput.dispatchEvent(new Event('blur', { bubbles: true }));
+        
+        // Also try setting with React-style events
+        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+        nativeInputValueSetter.call(dateInput, date);
+        
+        const inputEvent = new Event('input', { bubbles: true });
+        dateInput.dispatchEvent(inputEvent);
+        
+        await this.sleep(250);
+        
+        // Press Enter to confirm
+        console.log('[DEBUG] Pressing Enter to confirm date...');
         const enterEvent = new KeyboardEvent('keydown', {
             key: 'Enter',
-            code: 'Enter',
             keyCode: 13,
             which: 13,
-            bubbles: true,
-            cancelable: true
+            bubbles: true
         });
         dateInput.dispatchEvent(enterEvent);
         
-        // Also dispatch keyup for completeness
-        const enterUpEvent = new KeyboardEvent('keyup', {
-            key: 'Enter',
-            code: 'Enter',
-            keyCode: 13,
-            which: 13,
-            bubbles: true,
-            cancelable: true
-        });
-        dateInput.dispatchEvent(enterUpEvent);
+        // Also try on the document
+        document.dispatchEvent(enterEvent);
+        
+        // Verify the date was set
+        await this.sleep(500);
+        if (dateInput.value === date) {
+            console.log(`[DEBUG] ✅ Date successfully set to ${date}`);
+        } else {
+            console.log(`[DEBUG] ⚠️ Date setting uncertain (${dateInput.value} vs ${date})`);
+        }
         
         await this.sleep(1000); // Wait for chart to load
-        console.log(`[setReplayDate] Date set to ${date} and confirmed with Enter`);
     }
     
     async saveCollectedDataForSymbol(symbol, expectedCount) {
