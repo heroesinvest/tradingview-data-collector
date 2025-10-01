@@ -330,23 +330,22 @@ class TVPineLogsExtractor {
         }});
         
         try {
-            // Navigate to replay mode if needed (ONLY ONCE per symbol)
+            // Navigate to replay mode if needed (ONLY ONCE globally - TradingView persists it)
             if (dateRange.start || dateRange.end) {
-                if (!this.isInReplayMode) {
-                    // Check if already in replay mode
-                    const replayButton = document.querySelector('button[aria-label*="Replay"][aria-pressed="true"]');
-                    if (replayButton) {
-                        console.log('[DEBUG] ✅ Already in replay mode (aria-pressed=true), skipping activation');
-                        this.isInReplayMode = true;
-                    } else {
-                        console.log('[DEBUG] 🎬 Entering replay mode for first time this symbol');
-                        await this.navigateToReplayMode();
-                        this.isInReplayMode = true;
-                        console.log('[DEBUG] ✅ Replay mode now active, will stay active for all dates');
-                        await this.sleep(1000);
-                    }
+                // ALWAYS check DOM state first (TradingView persists replay mode across symbols)
+                const replayButton = document.querySelector('button[aria-label*="Replay"][aria-pressed="true"]');
+                if (replayButton) {
+                    console.log('[DEBUG] ✅ Replay mode already active (aria-pressed=true), staying in replay');
+                    this.isInReplayMode = true;
+                } else if (!this.isInReplayMode) {
+                    console.log('[DEBUG] 🎬 Activating replay mode for first time this session');
+                    await this.navigateToReplayMode();
+                    this.isInReplayMode = true;
+                    console.log('[DEBUG] ✅ Replay mode activated, will persist across all symbols');
+                    await this.sleep(1000);
                 } else {
-                    console.log('[DEBUG] ⏭️ Already in replay mode, skipping activation (staying in replay)');
+                    console.log('[DEBUG] ⏭️ Replay mode flag set but DOM check failed - revalidating');
+                    this.isInReplayMode = false; // Reset flag and let next iteration check DOM
                 }
                 
                 // Set date for this iteration
@@ -354,17 +353,24 @@ class TVPineLogsExtractor {
                 await this.sleep(1000); // Wait for chart to load
             }
             
+            // Reset current date counter at start of each date
+            this.currentDateEntriesCount = 0;
+            
             // Extract logs for this date range
             const entries = await this.extractPineLogsFromVirtualList();
             console.log(`[DEBUG] extractPineLogsFromVirtualList returned ${entries.length} entries`);
+            
+            // Update total logs processed (includes duplicates)
+            this.totalLogsProcessed += entries.length;
             
             // Filter and deduplicate entries
             const filteredEntries = this.filterAndDeduplicateEntries(entries, symbol, dateRange);
             console.log(`[DEBUG] filterAndDeduplicateEntries returned ${filteredEntries.length} entries`);
             
-            // Count PreData vs PostData
+            // Count PreData vs PostData for this date
             let preDataCount = 0;
             let postDataCount = 0;
+            let newUniqueCount = 0;
             
             // Add to collected data
             filteredEntries.forEach(entry => {
@@ -372,7 +378,7 @@ class TVPineLogsExtractor {
                 if (!this.uniqueKeys.has(key)) {
                     this.uniqueKeys.add(key);
                     this.collectedData.set(key, entry);
-                    this.currentDateEntriesCount++;
+                    newUniqueCount++;
                     
                     // Count by type
                     if (entry.type === 'PreData') preDataCount++;
@@ -380,16 +386,20 @@ class TVPineLogsExtractor {
                 }
             });
             
-            console.log(`[SUMMARY] Date ${dateRange.start}: Total=${entries.length}, Unique=${filteredEntries.length}, PreData=${preDataCount}, PostData=${postDataCount}`);
+            this.currentDateEntriesCount = newUniqueCount;
             
-            this.sendMessage({ type: 'entriesFound', data: {
-                total: entries.length,
-                unique: filteredEntries.length,
-                today: filteredEntries.length,
-                lastLogged: filteredEntries.length > 0 
-                    ? new Date().toLocaleTimeString() 
-                    : null
-            }});
+            console.log(`[SUMMARY] Date ${dateRange.start}: RawLogs=${entries.length}, NewUnique=${newUniqueCount}, TotalUnique=${this.uniqueKeys.size}, PreData=${preDataCount}, PostData=${postDataCount}`);
+            
+            // Update UI with correct counters
+            const totalEl = document.getElementById('totalEntries');
+            const uniqueEl = document.getElementById('uniqueEntries');
+            const currentDateEl = document.getElementById('entriesCurrentDate');
+            const lastLoggedEl = document.getElementById('lastLogged');
+            
+            if (totalEl) totalEl.textContent = this.totalLogsProcessed;
+            if (uniqueEl) uniqueEl.textContent = this.uniqueKeys.size;
+            if (currentDateEl) currentDateEl.textContent = this.currentDateEntriesCount;
+            if (lastLoggedEl && newUniqueCount > 0) lastLoggedEl.textContent = new Date().toLocaleTimeString();
             
             // Update floating window
             this.updateFloatingWindowStatus(`Found ${entries.length} entries, ${filteredEntries.length} unique`, 'success');
@@ -460,20 +470,27 @@ class TVPineLogsExtractor {
                 
                 if (newEntries.length === 0) {
                     consecutiveNoNewEntries++;
-                    // Reduced logging - only log at end
                     
-                    // Check if we've reached the bottom
-                    const isAtBottom = (viewport.scrollTop + viewport.clientHeight) >= (viewport.scrollHeight - 100);
+                    // Check if we've reached the bottom with more strict criteria
+                    const scrollTop = viewport.scrollTop;
+                    const scrollHeight = viewport.scrollHeight;
+                    const clientHeight = viewport.clientHeight;
+                    const distanceFromBottom = scrollHeight - (scrollTop + clientHeight);
+                    const isAtBottom = distanceFromBottom < 50; // Within 50px of bottom
                     
                     if (consecutiveNoNewEntries >= maxConsecutiveNoNewEntries) {
                         if (isAtBottom) {
-                            console.log(`Reached bottom of list AND no new entries for ${maxConsecutiveNoNewEntries} scrolls, stopping`);
+                            console.log(`✅ Extraction complete: Reached bottom (${Math.round(distanceFromBottom)}px from end) AND no new entries for ${maxConsecutiveNoNewEntries} scrolls`);
                             break;
                         } else {
-                            console.log(`[DEBUG] Not at bottom yet (${Math.round(viewport.scrollTop + viewport.clientHeight)}/${viewport.scrollHeight}), continuing despite no new entries...`);
+                            console.log(`[DEBUG] No new entries but NOT at bottom yet (${Math.round(distanceFromBottom)}px remaining, scroll: ${Math.round(scrollTop)}/${scrollHeight}), continuing...`);
                             // Reduce the counter to give more chances if not at bottom
                             consecutiveNoNewEntries = Math.floor(maxConsecutiveNoNewEntries / 2);
                         }
+                    } else if (isAtBottom && consecutiveNoNewEntries >= 5) {
+                        // Early exit if we're at bottom AND no new entries for 5 consecutive scrolls
+                        console.log(`✅ Early completion: At bottom with no new entries for ${consecutiveNoNewEntries} scrolls`);
+                        break;
                     }
                 } else {
                     consecutiveNoNewEntries = 0;
@@ -1746,9 +1763,10 @@ class TVPineLogsExtractor {
             <div id="floatingWindowContainer" style="
                 position: fixed;
                 bottom: 20px;
-                right: 520px;
+                right: 540px;
                 width: 380px;
                 min-height: 500px;
+                max-height: calc(100vh - 40px);
                 z-index: 999999;
                 background: #1e1e1e;
                 color: #ffffff;
@@ -1801,7 +1819,14 @@ class TVPineLogsExtractor {
                 </div>
                 
                 <!-- Content -->
-                <div style="padding: 16px; flex: 1; overflow-y: auto;">
+                <div id="windowContent" style="
+                    padding: 16px;
+                    flex: 1;
+                    overflow-y: auto;
+                    display: flex;
+                    flex-direction: column;
+                    min-height: 0;
+                ">
                     <!-- File Upload for Symbols -->
                     <div style="margin-bottom: 12px;">
                         <label style="display: block; margin-bottom: 4px; font-size: 12px; color: #ccc;">Upload Symbols (.txt file):</label>
@@ -2043,16 +2068,17 @@ class TVPineLogsExtractor {
                     </div>
                     
                     <!-- Status Messages -->
-                    <div style="margin-top: 16px;">
+                    <div id="statusMessagesContainer" style="margin-top: 16px; display: flex; flex-direction: column; flex: 1; min-height: 0;">
                         <div style="font-size: 12px; font-weight: bold; color: #4CAF50; margin-bottom: 8px;">📝 Status:</div>
-                        <div id="statusMessages" style="
-                            max-height: 150px;
+                        <div id="statusMessages" class="status-messages-scrollable" style="
+                            flex: 1;
                             overflow-y: auto;
                             background: #1a1a1a;
                             border: 1px solid #444;
                             border-radius: 4px;
                             padding: 8px;
                             font-size: 11px;
+                            min-height: 150px;
                         ">
                             <div style="color: #4CAF50;">✅ Ready to collect data</div>
                         </div>
@@ -2128,7 +2154,7 @@ class TVPineLogsExtractor {
                     restoreBtn.style.cssText = `
                         position: fixed;
                         bottom: 20px;
-                        right: 20px;
+                        right: 80px;
                         width: 60px;
                         height: 60px;
                         z-index: 999999;
