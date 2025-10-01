@@ -315,9 +315,20 @@ class TVPineLogsExtractor {
         const symbolDataAfter = this.collectedData.size;
         const entriesThisSymbol = symbolDataAfter - symbolDataBefore;
         
+        // Calculate total PreData and PostData for this symbol
+        let symbolPreData = 0;
+        let symbolPostData = 0;
+        for (const [key, entry] of this.collectedData) {
+            if (entry.type === 'PreData') symbolPreData++;
+            else if (entry.type === 'PostData') symbolPostData++;
+        }
+        const symbolDifference = Math.abs(symbolPreData - symbolPostData);
+        const symbolBalanced = symbolDifference <= 1;
+        
         console.log(`\n📊 Symbol ${symbol} complete: ${entriesThisSymbol} entries collected`);
         console.log(`[DOWNLOAD TRACE] Total collectedData size: ${this.collectedData.size}`);
         console.log(`[DOWNLOAD TRACE] Symbol data before: ${symbolDataBefore}, after: ${symbolDataAfter}`);
+        console.log(`[SUMMARY] ${symbolBalanced ? '✅' : '⚠️'} TOTAL for ${symbol}: PreData=${symbolPreData}, PostData=${symbolPostData}, Difference=${symbolDifference}`);
         
         // ALWAYS download, even if empty (helps debugging)
         console.log(`💾 Initiating download for ${symbol} (${entriesThisSymbol} entries)...`);
@@ -400,7 +411,28 @@ class TVPineLogsExtractor {
             
             this.currentDateEntriesCount = newUniqueCount;
             
-            console.log(`[SUMMARY] Date ${dateRange.start}: RawLogs=${entries.length}, NewUnique=${newUniqueCount}, TotalUnique=${this.uniqueKeys.size}, PreData=${preDataCount}, PostData=${postDataCount}`);
+            // Calculate difference between PreData and PostData
+            const difference = Math.abs(preDataCount - postDataCount);
+            const differenceStatus = difference <= 1 ? '✅' : '⚠️';
+            
+            console.log(`[SUMMARY] Date ${dateRange.start}: RawLogs=${entries.length}, NewUnique=${newUniqueCount}, TotalUnique=${this.uniqueKeys.size}`);
+            console.log(`[SUMMARY] ${differenceStatus} PreData=${preDataCount}, PostData=${postDataCount}, Difference=${difference} (${difference <= 1 ? 'GOOD - trades are balanced' : 'WARNING - imbalance detected'})`);
+            
+            // Send message with PreData/PostData breakdown
+            this.sendMessage({ 
+                type: 'dateCompleted', 
+                data: { 
+                    date: dateRange.start,
+                    dateIndex: dateIndex,
+                    rawLogs: entries.length,
+                    newUnique: newUniqueCount,
+                    totalUnique: this.uniqueKeys.size,
+                    preData: preDataCount,
+                    postData: postDataCount,
+                    difference: difference,
+                    balanced: difference <= 1
+                }
+            });
             
             // Update UI with correct counters
             const totalEl = document.getElementById('totalEntries');
@@ -413,8 +445,9 @@ class TVPineLogsExtractor {
             if (currentDateEl) currentDateEl.textContent = this.currentDateEntriesCount;
             if (lastLoggedEl && newUniqueCount > 0) lastLoggedEl.textContent = new Date().toLocaleTimeString();
             
-            // Update floating window
-            this.updateFloatingWindowStatus(`Found ${entries.length} entries, ${filteredEntries.length} unique`, 'success');
+            // Update floating window with PreData/PostData info
+            const balanceEmoji = difference <= 1 ? '✅' : '⚠️';
+            this.updateFloatingWindowStatus(`${balanceEmoji} Date ${dateRange.start}: Pre=${preDataCount}, Post=${postDataCount}, Diff=${difference}`, difference <= 1 ? 'success' : 'warning');
             const currentSymbolEl = document.getElementById('currentSymbol');
             if (currentSymbolEl) currentSymbolEl.textContent = symbol;
             
