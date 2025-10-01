@@ -206,9 +206,12 @@ extract_predata_features(signal_side) =>
         // === BUILD JSON ===
         entry_datetime = str.replace(str.format_time(time, "yyyy-MM-dd HH:mm:ss", "UTC"), " ", "T") + ".000Z"
         
+        // Use str.tostring() to force conversion in replay mode - prefix and ticker become objects in replay
+        clean_symbol = str.tostring(syminfo.prefix) + ":" + str.tostring(syminfo.ticker)
+        
         json_payload = '{"type":"PreData"' +
                       ',"entry_datetime":"' + entry_datetime + '"' +
-                      ',"symbol":"' + syminfo.tickerid + '"' +
+                      ',"symbol":"' + clean_symbol + '"' +
                       ',"timeframe":"' + timeframe.period + '"' +
                       ',"side":"' + signal_side + '"' +
                       ',"atr_percentage":' + str.tostring(atr_percentage) +
@@ -328,9 +331,12 @@ update_positions() =>
                 // Create PostData JSON
                 entry_datetime = str.replace(str.format_time(entry_time, "yyyy-MM-dd HH:mm:ss", "UTC"), " ", "T") + ".000Z"
                 
+                // Use str.tostring() to force conversion in replay mode
+                clean_symbol = str.tostring(syminfo.prefix) + ":" + str.tostring(syminfo.ticker)
+                
                 postdata_json = '{"type":"PostData"' +
                                ',"entry_datetime":"' + entry_datetime + '"' +
-                               ',"symbol":"' + syminfo.tickerid + '"' +
+                               ',"symbol":"' + clean_symbol + '"' +
                                ',"timeframe":"' + timeframe.period + '"' +
                                ',"side":"' + (is_long ? "long" : "short") + '"' +
                                ',"maxATR":' + str.tostring(round3(max_atr)) +

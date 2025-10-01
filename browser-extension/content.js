@@ -24,6 +24,8 @@ class TVPineLogsExtractor {
         this.currentDateEntriesCount = 0;
         this.currentSymbolEntriesCount = 0;
         this.lastLoggedTime = null;
+        this.lastEntryType = null; // PreData or PostData
+        this.lastEntryDatetime = null; // Full datetime string
         
         this.init();
     }
@@ -158,10 +160,11 @@ class TVPineLogsExtractor {
             }
             
             if (this.isCollecting) {
-                await this.saveCollectedData();
+                // Downloads already done per-symbol - just send completion message
                 this.sendMessage({ type: 'collectionComplete', data: { 
-                    message: `Collected ${this.uniqueKeys.size} unique entries from ${symbols.length} symbols`
+                    message: `✅ Collection complete! Downloaded ${symbols.length} JSON files with ${this.uniqueKeys.size} total unique entries`
                 }});
+                console.log(`🎉 Collection complete! ${symbols.length} symbols processed, ${this.uniqueKeys.size} unique entries`);
             }
             
         } catch (error) {
@@ -178,7 +181,20 @@ class TVPineLogsExtractor {
             this.abortController.abort();
         }
         this.stopStopwatches();
-        console.log('Collection stopped');
+        
+        // Update UI buttons
+        const startBtn = document.getElementById('startCollectionBtn');
+        const stopBtn = document.getElementById('stopCollectionBtn');
+        if (startBtn) startBtn.disabled = false;
+        if (stopBtn) stopBtn.disabled = true;
+        
+        // Send stop message
+        this.sendMessage({ type: 'collectionStopped', data: { 
+            message: 'Collection stopped by user',
+            entriesCollected: this.uniqueKeys.size
+        }});
+        
+        console.log('🛑 Collection stopped by user');
     }
     
     updateProgressDisplay() {
@@ -210,7 +226,8 @@ class TVPineLogsExtractor {
         
         if (currentDate && this.dateList && this.currentDateIndex < this.dateList.length) {
             const dateRange = this.dateList[this.currentDateIndex];
-            currentDate.textContent = dateRange.startDate || '-';
+            const dateStr = dateRange.start || dateRange.end || '-';
+            currentDate.textContent = dateStr; // Already in yyyy-MM-dd format
         }
         
         if (symbolProgress && this.currentConfig) {
@@ -228,6 +245,22 @@ class TVPineLogsExtractor {
             const formatted = `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')} ${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`;
             lastLogged.textContent = formatted;
         }
+        
+        // Update last entry display
+        const lastEntryType = document.getElementById('lastEntryType');
+        const lastEntryDatetime = document.getElementById('lastEntryDatetime');
+        
+        if (lastEntryType && this.lastEntryType) {
+            lastEntryType.textContent = this.lastEntryType;
+            lastEntryType.style.color = this.lastEntryType === 'PreData' ? '#FF9800' : '#4CAF50';
+        }
+        
+        if (lastEntryDatetime && this.lastEntryDatetime) {
+            // Format as yyyy-MM-dd HH:mm
+            const dt = new Date(this.lastEntryDatetime);
+            const formatted = `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')} ${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`;
+            lastEntryDatetime.textContent = formatted;
+        }
     }
     
     async processSymbol(symbol, symbolIndex) {
@@ -244,7 +277,10 @@ class TVPineLogsExtractor {
             await this.sleep(2000); // Wait for page to load
         }
         
-        // Process each date range for this symbol
+        // Reset symbol-specific data collection
+        const symbolDataBefore = this.collectedData.size;
+        
+        // Process each date range for this symbol (usually just 1)
         for (let dateIndex = 0; dateIndex < this.dateList.length && this.isCollecting; dateIndex++) {
             this.currentDateIndex = dateIndex;
             const dateRange = this.dateList[dateIndex];
@@ -254,10 +290,25 @@ class TVPineLogsExtractor {
             // Small delay between dates
             await this.sleep(500);
         }
+        
+        // CRITICAL: Download JSON for this symbol IMMEDIATELY before moving to next symbol
+        const symbolDataAfter = this.collectedData.size;
+        const entriesThisSymbol = symbolDataAfter - symbolDataBefore;
+        
+        if (entriesThisSymbol > 0) {
+            console.log(`✅ Collected ${entriesThisSymbol} entries for ${symbol}. Downloading JSON now...`);
+            await this.saveCollectedDataForSymbol(symbol);
+        } else {
+            console.warn(`⚠️ No entries collected for ${symbol}`);
+        }
     }
     
     async processDateRange(symbol, dateRange, dateIndex) {
         console.log(`Processing date range ${dateIndex + 1}/${this.dateList.length}: ${dateRange.start} to ${dateRange.end}`);
+        
+        // Reset date-specific counters
+        this.currentDateEntriesCount = 0;
+        this.resetDateStopwatch();
         
         this.sendMessage({ type: 'dateStarted', data: { 
             date: `${dateRange.start} → ${dateRange.end}`,
@@ -274,9 +325,15 @@ class TVPineLogsExtractor {
             
             // Extract logs for this date range
             const entries = await this.extractPineLogsFromVirtualList();
+            console.log(`[DEBUG] extractPineLogsFromVirtualList returned ${entries.length} entries`);
             
             // Filter and deduplicate entries
             const filteredEntries = this.filterAndDeduplicateEntries(entries, symbol, dateRange);
+            console.log(`[DEBUG] filterAndDeduplicateEntries returned ${filteredEntries.length} entries`);
+            
+            // Count PreData vs PostData
+            let preDataCount = 0;
+            let postDataCount = 0;
             
             // Add to collected data
             filteredEntries.forEach(entry => {
@@ -284,8 +341,15 @@ class TVPineLogsExtractor {
                 if (!this.uniqueKeys.has(key)) {
                     this.uniqueKeys.add(key);
                     this.collectedData.set(key, entry);
+                    this.currentDateEntriesCount++;
+                    
+                    // Count by type
+                    if (entry.type === 'PreData') preDataCount++;
+                    else if (entry.type === 'PostData') postDataCount++;
                 }
             });
+            
+            console.log(`[SUMMARY] Date ${dateRange.start}: Total=${entries.length}, Unique=${filteredEntries.length}, PreData=${preDataCount}, PostData=${postDataCount}`);
             
             this.sendMessage({ type: 'entriesFound', data: {
                 total: entries.length,
@@ -315,25 +379,29 @@ class TVPineLogsExtractor {
                 throw new Error('Pine Logs virtual list viewport not found');
             }
             
-            // Get scroll speed configuration
-            const scrollSpeedSelect = document.getElementById('scrollSpeed');
-            const scrollDelay = scrollSpeedSelect ? parseInt(scrollSpeedSelect.value) : 100;
-            const scrollIncrement = {
-                25: 10000,
-                50: 5000,
-                100: 3000,
-                200: 1000,
-                500: 500
-            }[scrollDelay] || 3000;
+            // Scroll speed will be read from UI on each iteration (can be changed live)
+            const getScrollConfig = () => {
+                const scrollSpeedSelect = document.getElementById('scrollSpeed');
+                const scrollDelay = scrollSpeedSelect ? parseInt(scrollSpeedSelect.value) : 100;
+                const scrollIncrement = {
+                    25: 10000,
+                    50: 5000,
+                    100: 3000,
+                    200: 1000,
+                    500: 500
+                }[scrollDelay] || 3000;
+                return { scrollDelay, scrollIncrement };
+            };
             
-            console.log(`[CONFIG] Scroll speed: ${scrollDelay}ms delay, ${scrollIncrement}px increment`);
+            const initialConfig = getScrollConfig();
+            console.log(`[CONFIG] Initial scroll speed: ${initialConfig.scrollDelay}ms delay, ${initialConfig.scrollIncrement}px increment`);
             
             const entries = [];
             const seenEntries = new Set();
             let scrollAttempts = 0;
-            const maxScrollAttempts = 500; // Increased from 100
+            const maxScrollAttempts = 9999; // No hard limit - will stop when at bottom
             let consecutiveNoNewEntries = 0;
-            const maxConsecutiveNoNewEntries = 20; // Increased from 10
+            const maxConsecutiveNoNewEntries = 20; // Stop after 20 scrolls with no new entries
             
             // Scroll to top first
             console.log('[DEBUG] Scrolling to top of list...');
@@ -362,13 +430,18 @@ class TVPineLogsExtractor {
                 if (newEntries.length === 0) {
                     consecutiveNoNewEntries++;
                     console.log(`[DEBUG] No new entries (stable count: ${consecutiveNoNewEntries}/${maxConsecutiveNoNewEntries})`);
+                    
+                    // Check if we've reached the bottom
+                    const isAtBottom = (viewport.scrollTop + viewport.clientHeight) >= (viewport.scrollHeight - 100);
+                    
                     if (consecutiveNoNewEntries >= maxConsecutiveNoNewEntries) {
-                        // Check if we've reached the bottom
-                        const isAtBottom = (viewport.scrollTop + viewport.clientHeight) >= (viewport.scrollHeight - 100);
-                        console.log(`[DEBUG] At bottom? ${isAtBottom} (scrollTop: ${viewport.scrollTop}, scrollHeight: ${viewport.scrollHeight})`);
                         if (isAtBottom) {
-                            console.log('Reached bottom of list, stopping');
+                            console.log(`Reached bottom of list AND no new entries for ${maxConsecutiveNoNewEntries} scrolls, stopping`);
                             break;
+                        } else {
+                            console.log(`[DEBUG] Not at bottom yet (${Math.round(viewport.scrollTop + viewport.clientHeight)}/${viewport.scrollHeight}), continuing despite no new entries...`);
+                            // Reduce the counter to give more chances if not at bottom
+                            consecutiveNoNewEntries = Math.floor(maxConsecutiveNoNewEntries / 2);
                         }
                     }
                 } else {
@@ -376,7 +449,8 @@ class TVPineLogsExtractor {
                     entries.push(...newEntries);
                 }
                 
-                // Scroll down
+                // Scroll down (get current config from UI - can be changed live)
+                const { scrollDelay, scrollIncrement } = getScrollConfig();
                 await this.scrollVirtualList(viewport, scrollIncrement);
                 scrollAttempts++;
                 
@@ -393,10 +467,9 @@ class TVPineLogsExtractor {
             this.updateProgressDisplay();
             
             // Update floating window
-            const filteredEntries = this.filterDuplicates(entries);
-            this.updateFloatingWindowStatus(`Found ${entries.length} entries, ${filteredEntries.length} unique`, 'success');
+            this.updateFloatingWindowStatus(`Found ${entries.length} unique entries`, 'success');
             
-            return filteredEntries;
+            return entries;
             
         } catch (error) {
             console.error('[ERROR] Extract from virtual list failed:', error);
@@ -475,19 +548,32 @@ class TVPineLogsExtractor {
             return scrollViewport;
         }
         
-        // Secondary: Use reference fallback method to find scrollable element
+        // Secondary: Look for container-* class (the actual scroll container)
+        const containerDiv = logsPanel.querySelector('[class*="container-"]');
+        if (containerDiv) {
+            const style = window.getComputedStyle(containerDiv);
+            if ((style.overflowY === 'auto' || style.overflowY === 'scroll') && 
+                containerDiv.scrollHeight > containerDiv.clientHeight + 100) {
+                console.log('[DEBUG] Found scrollable container with significant content:', containerDiv);
+                console.log('[DEBUG] ScrollHeight:', containerDiv.scrollHeight, 'ClientHeight:', containerDiv.clientHeight);
+                return containerDiv;
+            }
+        }
+        
+        // Tertiary: Use reference fallback method to find scrollable element with MEANINGFUL scrollHeight
         const allDivs = logsPanel.querySelectorAll('div');
         for (const div of allDivs) {
             const style = window.getComputedStyle(div);
+            // Only accept if there's at least 1000px of scrollable content (not just a few pixels)
             if ((style.overflowY === 'auto' || style.overflowY === 'scroll') && 
-                div.scrollHeight > div.offsetHeight) {
-                console.log('[DEBUG] Found scrollable div with content:', div);
-                console.log('[DEBUG] ScrollHeight:', div.scrollHeight, 'OffsetHeight:', div.offsetHeight);
+                div.scrollHeight > div.clientHeight + 1000) {
+                console.log('[DEBUG] Found scrollable div with significant content:', div);
+                console.log('[DEBUG] ScrollHeight:', div.scrollHeight, 'ClientHeight:', div.clientHeight);
                 return div;
             }
         }
         
-        // Tertiary: Look for standard virtual list classes
+        // Quaternary: Look for standard virtual list classes (but validate they scroll)
         const virtualSelectors = [
             '.list-L0IhqRpX',
             '.virtualScroll-L0IhqRpX', 
@@ -498,7 +584,7 @@ class TVPineLogsExtractor {
         
         for (const selector of virtualSelectors) {
             const element = logsPanel.querySelector(selector);
-            if (element) {
+            if (element && element.scrollHeight > element.clientHeight + 100) {
                 console.log(`[DEBUG] Found virtual list using selector: ${selector}`);
                 return element;
             }
@@ -531,16 +617,12 @@ class TVPineLogsExtractor {
                 // Get the text content
                 const logText = logElement.textContent.trim();
                 
-                // DEBUG: Log first 200 chars of every 10th element
-                if (processedCount % 10 === 0) {
-                    console.log(`[DEBUG Sample ${processedCount}]:`, logText.substring(0, 200));
-                }
-                
                 // Check if this is our log entry (contains PreData or PostData)
                 if (!this.isOurLogEntry(logText)) {
                     skippedNotOurEntry++;
-                    if (processedCount % 10 === 0) {
-                        console.log(`[DEBUG] Not our entry (no PreData/PostData found)`);
+                    // Log first entry to see format
+                    if (skippedNotOurEntry === 1) {
+                        console.log(`[DEBUG] First skipped entry sample:`, logText.substring(0, 300));
                     }
                     continue;
                 }
@@ -558,10 +640,12 @@ class TVPineLogsExtractor {
                 const timestamp = timestampMatch[1];
                 const jsonText = logText.substring(timestampMatch[0].length);
                 console.log(`[DEBUG] Timestamp: ${timestamp}`);
-                console.log(`[DEBUG] JSON text (first 200 chars):`, jsonText.substring(0, 200));
+                // console.log(`[DEBUG] JSON text (first 200 chars):`, jsonText.substring(0, 200));
                 
                 try {
-                    const parsedData = JSON.parse(jsonText);
+                    // Replace NaN with null to make valid JSON
+                    const cleanedJson = jsonText.replace(/:\s*NaN/g, ':null');
+                    const parsedData = JSON.parse(cleanedJson);
                     console.log(`[DEBUG] Successfully parsed JSON:`, Object.keys(parsedData));
                     
                     // Normalize timestamp to ISO 8601
@@ -584,8 +668,10 @@ class TVPineLogsExtractor {
                     this.currentDateEntriesCount++;
                     this.currentSymbolEntriesCount++;
                     
-                    // Track last logged time
+                    // Track last entry info for display
                     this.lastLoggedTime = parsedData.entry_datetime || parsedData.entry_date || parsedData.timestamp;
+                    this.lastEntryType = parsedData.type; // PreData or PostData
+                    this.lastEntryDatetime = parsedData.entry_datetime || parsedData.entry_date || parsedData.timestamp;
                     
                     console.log(`[DEBUG] ✅ Successfully added entry #${entries.length}`);
                     
@@ -614,9 +700,10 @@ class TVPineLogsExtractor {
     
     isOurLogEntry(content) {
         // Check if the content looks like our JSON data
-        // Format: [timestamp]: {"symbol": "BINANCE:BTCUSDT.P", ...}
-        return content.includes('{"symbol"') && 
-               (content.includes('"type":"PreData"') || content.includes('"type":"PostData"'));
+        // Format: [timestamp]: {"symbol": "BINANCE:BTCUSDT.P", "type": "PreData" OR "PostData", ...}
+        // More flexible check - just needs to have symbol and type fields with PreData or PostData
+        return content.includes('"symbol"') && 
+               (content.includes('PreData') || content.includes('PostData'));
     }
     
     normalizeTimestamp(dateStr) {
@@ -745,39 +832,46 @@ class TVPineLogsExtractor {
         
         for (const entry of entries) {
             try {
-                // Parse JSON content
-                const data = JSON.parse(entry.content);
+                // Entry is already a parsed object from extractVisibleLogEntries
+                const data = entry;
                 
-                // Basic validation
-                if (!data.type || !data.symbol) continue;
-                
-                // Symbol filter (if we're processing specific symbols)
-                if (this.currentConfig.symbols.length > 1 && data.symbol !== symbol) {
+                // Skip if no valid data
+                if (!data || typeof data !== 'object') {
+                    console.warn('[DEBUG] Skipping invalid entry:', typeof data);
                     continue;
                 }
                 
-                // Date filter
-                if (dateRange.start || dateRange.end) {
-                    const entryDate = new Date(data.entry_datetime || data.timestamp);
-                    const startDate = dateRange.start ? new Date(dateRange.start) : null;
-                    const endDate = dateRange.end ? new Date(dateRange.end) : null;
-                    
-                    if (startDate && entryDate < startDate) continue;
-                    if (endDate && entryDate > endDate) continue;
+                // Basic validation
+                if (!data.type || !data.symbol) {
+                    console.warn('[DEBUG] Skipping entry missing type or symbol:', data);
+                    continue;
                 }
+                
+                // Symbol filter (if we're processing specific symbols)
+                if (this.currentConfig.symbols.length > 1 && data.symbol !== symbol) {
+                    console.log(`[DEBUG] Skipping entry for different symbol: ${data.symbol} (expected: ${symbol})`);
+                    continue;
+                }
+                
+                // NOTE: No date filtering - all entries will be before current date anyway
+                // The replay mode date selection already ensures we only see historical data
                 
                 // Generate deduplication key
                 const dedupKey = this.generateEntryKey(data);
-                if (seen.has(dedupKey)) continue;
+                if (seen.has(dedupKey)) {
+                    console.log(`[DEBUG] Duplicate entry found (key: ${dedupKey})`);
+                    continue;
+                }
                 
                 seen.add(dedupKey);
                 filtered.push(data);
                 
             } catch (error) {
-                console.warn('Error parsing log entry:', error, entry.content);
+                console.warn('Error processing entry:', error, entry);
             }
         }
         
+        console.log(`[DEBUG] Filtered ${entries.length} entries down to ${filtered.length} unique entries`);
         return filtered;
     }
     
@@ -787,42 +881,19 @@ class TVPineLogsExtractor {
     }
     
     generateDateList(startDate, endDate) {
-        const dates = [];
+        // Simplified: Collect ONCE per symbol using start date as reference
+        // All data will be collected in a single pass through the Pine Logs
+        // No need for multiple date iterations - replay mode shows all historical data
         
         if (!startDate && !endDate) {
-            // No date filter - return empty array (will collect current data)
+            // No date specified - collect current live data without replay mode
             return [{ start: null, end: null }];
         }
         
-        if (!startDate || !endDate) {
-            // Single date
-            const singleDate = startDate || endDate;
-            return [{ start: singleDate, end: singleDate }];
-        }
-        
-        // Multiple dates - generate year-based ranges
-        const start = new Date(startDate);
-        const end = new Date(endDate);
-        
-        // Start with the exact start date
-        dates.push({ start: startDate, end: null });
-        
-        let currentYear = start.getFullYear();
-        const endYear = end.getFullYear();
-        
-        // Add end of each year until we reach the end year
-        while (currentYear < endYear) {
-            const yearEnd = `${currentYear}-12-31`;
-            dates.push({ start: null, end: yearEnd });
-            currentYear++;
-        }
-        
-        // Add the exact end date
-        if (startDate !== endDate) {
-            dates.push({ start: null, end: endDate });
-        }
-        
-        return dates;
+        // If any date is specified, use startDate for replay mode entry point
+        // This gives us access to all historical data in Pine Logs
+        const replayDate = startDate || endDate;
+        return [{ start: replayDate, end: null }];
     }
     
     getCurrentSymbol() {
@@ -1070,26 +1141,147 @@ class TVPineLogsExtractor {
         
         console.log(`Setting replay date to: ${date}`);
         
-        // Look for date picker or input
-        const dateSelectors = [
-            'input[type="date"]',
-            '[class*="date-picker"]',
-            '[class*="calendar"]',
-            'input[placeholder*="date"]'
-        ];
+        // Step 1: Find the "Select date" button using TradingView's structure
+        // Look for: <div class="selectDateBar__button-*"> with text "Select date"
+        let dateButton = null;
         
-        for (const selector of dateSelectors) {
-            const input = document.querySelector(selector);
-            if (input) {
-                input.value = date;
-                input.dispatchEvent(new Event('input', { bubbles: true }));
-                input.dispatchEvent(new Event('change', { bubbles: true }));
-                await this.sleep(500);
-                return;
+        // Try to find button by text content "Select date"
+        const allButtons = document.querySelectorAll('div[data-role="button"], button');
+        for (const btn of allButtons) {
+            const textEl = btn.querySelector('.js-button-text');
+            const buttonText = textEl ? textEl.textContent : btn.textContent;
+            if (buttonText && buttonText.includes('Select date') && this.isElementVisible(btn)) {
+                dateButton = btn;
+                console.log('[setReplayDate] Found "Select date" button');
+                break;
             }
         }
         
-        console.warn('Date input not found');
+        // Fallback selectors
+        if (!dateButton) {
+            const fallbackSelectors = [
+                '[class*="selectDateBar__button"]',
+                '[class*="selectDateBar"] [data-role="button"]',
+                '.controls__control_type_selectBar [data-role="button"]'
+            ];
+            
+            for (const selector of fallbackSelectors) {
+                const buttons = document.querySelectorAll(selector);
+                for (const btn of buttons) {
+                    if (this.isElementVisible(btn)) {
+                        dateButton = btn;
+                        console.log(`[setReplayDate] Found button using: ${selector}`);
+                        break;
+                    }
+                }
+                if (dateButton) break;
+            }
+        }
+        
+        if (!dateButton) {
+            console.warn('[setReplayDate] Replay date button not found');
+            return;
+        }
+        
+        // Step 2: Click button to open date picker
+        console.log('[setReplayDate] Clicking date selection button');
+        dateButton.click();
+        await this.sleep(800); // Wait for date picker to open
+        
+        // Step 3: Find date input with placeholder="YYYY-MM-DD"
+        const dateInputSelectors = [
+            'input[placeholder="YYYY-MM-DD"]',
+            'input[data-qa-id="ui-lib-Input-input"]',
+            'input[class*="input-"][class*="size-small"]',
+            'input[type="text"][placeholder*="YYYY"]',
+            'input[type="date"]'
+        ];
+        
+        let dateInput = null;
+        for (const selector of dateInputSelectors) {
+            const inputs = document.querySelectorAll(selector);
+            for (const input of inputs) {
+                if (this.isElementVisible(input)) {
+                    dateInput = input;
+                    break;
+                }
+            }
+            if (dateInput) break;
+        }
+        
+        if (!dateInput) {
+            console.warn('[setReplayDate] Date input not found after clicking button');
+            return;
+        }
+        
+        // Step 4: Set date value
+        console.log('[setReplayDate] Setting date input value');
+        dateInput.focus();
+        dateInput.value = date;
+        dateInput.dispatchEvent(new Event('input', { bubbles: true }));
+        dateInput.dispatchEvent(new Event('change', { bubbles: true }));
+        await this.sleep(300);
+        
+        // Step 5: Press Enter key to confirm (THIS WAS MISSING)
+        console.log('[setReplayDate] Pressing Enter to confirm date');
+        const enterEvent = new KeyboardEvent('keydown', {
+            key: 'Enter',
+            code: 'Enter',
+            keyCode: 13,
+            which: 13,
+            bubbles: true,
+            cancelable: true
+        });
+        dateInput.dispatchEvent(enterEvent);
+        
+        // Also dispatch keyup for completeness
+        const enterUpEvent = new KeyboardEvent('keyup', {
+            key: 'Enter',
+            code: 'Enter',
+            keyCode: 13,
+            which: 13,
+            bubbles: true,
+            cancelable: true
+        });
+        dateInput.dispatchEvent(enterUpEvent);
+        
+        await this.sleep(1000); // Wait for chart to load
+        console.log(`[setReplayDate] Date set to ${date} and confirmed with Enter`);
+    }
+    
+    async saveCollectedDataForSymbol(symbol) {
+        // Save data for specific symbol only
+        if (this.collectedData.size === 0) {
+            console.log('No data to save for symbol:', symbol);
+            return;
+        }
+        
+        // Filter entries for this symbol
+        const symbolEntries = new Map();
+        for (const [key, entry] of this.collectedData) {
+            if (entry.symbol === symbol || entry.symbol.endsWith(`:${symbol}`)) {
+                symbolEntries.set(key, entry);
+            }
+        }
+        
+        if (symbolEntries.size === 0) {
+            console.log('No entries found for symbol:', symbol);
+            return;
+        }
+        
+        // Group data by symbol for file naming
+        const groupedData = this.groupEntriesForSaving(symbolEntries);
+        
+        // Save each file (usually just 1 per symbol)
+        for (const [fileName, data] of Object.entries(groupedData)) {
+            await this.downloadJSONFile(fileName, data);
+            console.log(`📥 Downloaded: ${fileName} (${data.length} entries)`);
+        }
+        
+        // Remove saved entries from collection to free memory
+        for (const key of symbolEntries.keys()) {
+            this.collectedData.delete(key);
+        }
     }
     
     async saveCollectedData() {
@@ -1099,7 +1291,7 @@ class TVPineLogsExtractor {
         }
         
         // Group data by symbol and type
-        const groupedData = this.groupDataForSaving();
+        const groupedData = this.groupEntriesForSaving(this.collectedData);
         
         // Save each group as a separate file
         for (const [fileName, data] of Object.entries(groupedData)) {
@@ -1109,31 +1301,47 @@ class TVPineLogsExtractor {
         console.log(`Saved ${Object.keys(groupedData).length} files with ${this.collectedData.size} total entries`);
     }
     
-    groupDataForSaving() {
+    groupEntriesForSaving(entriesMap) {
         const grouped = {};
         
-        for (const [key, entry] of this.collectedData) {
+        // Group by symbol+timeframe first
+        const symbolGroups = {};
+        
+        for (const [key, entry] of entriesMap) {
             // Extract symbol ticker for filename
             const symbolParts = entry.symbol.split(':');
             const ticker = symbolParts.length > 1 ? this.escapeSymbolForFilename(symbolParts[1]) : entry.symbol;
+            const timeframe = entry.timeframe || '60';
             
-            // Generate filename
-            const fileName = `${ticker}-${entry.timeframe}-${this.formatDateForFilename(new Date())}.json`;
-            
-            if (!grouped[fileName]) {
-                grouped[fileName] = [];
+            const groupKey = `${ticker}-${timeframe}`;
+            if (!symbolGroups[groupKey]) {
+                symbolGroups[groupKey] = [];
             }
-            
-            grouped[fileName].push(entry);
+            symbolGroups[groupKey].push(entry);
         }
         
-        // Sort entries in each group by timestamp
-        for (const fileName of Object.keys(grouped)) {
-            grouped[fileName].sort((a, b) => {
+        // Create files with date range in name: {ticker}-{timeframe}-{firstDateTime}-{lastDateTime}.json
+        for (const [groupKey, entries] of Object.entries(symbolGroups)) {
+            // Sort by timestamp
+            entries.sort((a, b) => {
                 const timeA = new Date(a.entry_datetime || a.timestamp || 0);
                 const timeB = new Date(b.entry_datetime || b.timestamp || 0);
                 return timeA - timeB;
             });
+            
+            // Get first and last timestamps
+            const firstEntry = entries[0];
+            const lastEntry = entries[entries.length - 1];
+            
+            const firstTime = new Date(firstEntry.entry_datetime || firstEntry.timestamp);
+            const lastTime = new Date(lastEntry.entry_datetime || lastEntry.timestamp);
+            
+            const firstDateStr = this.formatDateForFilename(firstTime);
+            const lastDateStr = this.formatDateForFilename(lastTime);
+            
+            // Filename format: {ticker}-{timeframe}-{firstDateTime}-{lastDateTime}.json
+            const fileName = `${groupKey}-${firstDateStr}-${lastDateStr}.json`;
+            grouped[fileName] = entries;
         }
         
         return grouped;
@@ -1300,7 +1508,7 @@ class TVPineLogsExtractor {
         window.innerHTML = `
             <div id="floatingWindowContainer" style="
                 position: fixed;
-                top: 80px;
+                bottom: 20px;
                 right: 20px;
                 width: 380px;
                 min-height: 500px;
@@ -1406,7 +1614,7 @@ class TVPineLogsExtractor {
                     
                     <!-- Scroll Speed Selector -->
                     <div style="margin-bottom: 16px;">
-                        <label style="display: block; margin-bottom: 4px; font-size: 12px; color: #ccc;">Scroll Speed:</label>
+                        <label style="display: block; margin-bottom: 4px; font-size: 12px; color: #ccc;">Scroll Speed: <span id="currentSpeedLabel" style="color: #4CAF50; font-weight: bold;">Normal</span></label>
                         <select id="scrollSpeed" style="
                             width: 100%;
                             padding: 6px;
@@ -1416,6 +1624,9 @@ class TVPineLogsExtractor {
                             border-radius: 4px;
                             font-size: 12px;
                             box-sizing: border-box;
+                            cursor: pointer;
+                            position: relative;
+                            z-index: 1000;
                         ">
                             <option value="25">⚡ Very Fast (25ms, 10000px)</option>
                             <option value="50">🚀 Fast (50ms, 5000px)</option>
@@ -1423,6 +1634,7 @@ class TVPineLogsExtractor {
                             <option value="200">🐢 Slow (200ms, 1000px)</option>
                             <option value="500">🐌 Very Slow (500ms, 500px)</option>
                         </select>
+                        <div style="font-size: 10px; color: #888; margin-top: 4px;">💡 Can be changed while scraping</div>
                     </div>
                     
                     <!-- Progress Display -->
@@ -1446,10 +1658,29 @@ class TVPineLogsExtractor {
                             </div>
                         </div>
                         
-                        <!-- Current Status -->
-                        <div style="margin-bottom: 8px;">
-                            <div style="font-size: 10px; color: #888;">Current Symbol: <span id="currentSymbol" style="color: #fff; font-weight: bold;">-</span> (<span id="symbolProgress">0/0</span>)</div>
-                            <div style="font-size: 10px; color: #888;">Current Date: <span id="currentDate" style="color: #fff; font-weight: bold;">-</span> (<span id="dateProgress">0/0</span>)</div>
+            <!-- Current Status - BIGGER DISPLAY with Progress to Right -->
+            <div style="margin-bottom: 12px; padding: 8px; background: #252525; border-radius: 4px;">
+                <div style="margin-bottom: 8px;">
+                    <div style="font-size: 9px; color: #888; margin-bottom: 2px;">Current Symbol</div>
+                    <div style="display: flex; align-items: center; justify-content: space-between;">
+                        <div id="currentSymbol" style="font-size: 20px; color: #4CAF50; font-weight: bold; font-family: monospace;">-</div>
+                        <div id="symbolProgress" style="font-size: 16px; color: #888; font-weight: bold;">0/0</div>
+                    </div>
+                </div>
+                <div>
+                    <div style="font-size: 9px; color: #888; margin-bottom: 2px;">Current Date</div>
+                    <div style="display: flex; align-items: center; justify-content: space-between;">
+                        <div id="currentDate" style="font-size: 20px; color: #2196F3; font-weight: bold; font-family: monospace;">-</div>
+                        <div id="dateProgress" style="font-size: 16px; color: #888; font-weight: bold;">0/0</div>
+                    </div>
+                </div>
+            </div>                        <!-- Last Entry Display - BIG -->
+                        <div style="margin-bottom: 8px; padding: 8px; background: #1a3a1a; border-radius: 4px; border-left: 3px solid #4CAF50;">
+                            <div style="font-size: 9px; color: #888; margin-bottom: 2px;">Last Entry</div>
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <div id="lastEntryType" style="font-size: 16px; color: #4CAF50; font-weight: bold;">-</div>
+                                <div id="lastEntryDatetime" style="font-size: 14px; color: #81C784; font-family: monospace;">-</div>
+                            </div>
                         </div>
                         
                         <!-- Entry Counts -->
@@ -1592,6 +1823,23 @@ class TVPineLogsExtractor {
             this.updateFloatingWindowStatus('Collection stopped', 'warning');
             startBtn.disabled = false;
             stopBtn.disabled = true;
+        });
+        
+        // Scroll speed selector - update label on change
+        const scrollSpeedSelect = document.getElementById('scrollSpeed');
+        const speedLabel = document.getElementById('currentSpeedLabel');
+        scrollSpeedSelect?.addEventListener('change', (e) => {
+            const speedNames = {
+                '25': 'Very Fast',
+                '50': 'Fast',
+                '100': 'Normal',
+                '200': 'Slow',
+                '500': 'Very Slow'
+            };
+            if (speedLabel) {
+                speedLabel.textContent = speedNames[e.target.value] || 'Normal';
+            }
+            console.log(`🔄 Scroll speed changed to: ${speedNames[e.target.value]} (${e.target.value}ms)`);
         });
         
         // Initialize stopwatches
