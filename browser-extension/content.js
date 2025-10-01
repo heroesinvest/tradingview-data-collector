@@ -390,9 +390,9 @@ class TVPineLogsExtractor {
             const filteredEntries = this.filterAndDeduplicateEntries(entries, symbol, dateRange);
             console.log(`[DEBUG] filterAndDeduplicateEntries returned ${filteredEntries.length} entries`);
             
-            // Count PreData vs PostData for this date
-            let preDataCount = 0;
-            let postDataCount = 0;
+            // Count PreData vs PostData for this date - NEW entries only
+            let preDataCountNew = 0;
+            let postDataCountNew = 0;
             let newUniqueCount = 0;
             
             // Add to collected data
@@ -403,20 +403,29 @@ class TVPineLogsExtractor {
                     this.collectedData.set(key, entry);
                     newUniqueCount++;
                     
-                    // Count by type
-                    if (entry.type === 'PreData') preDataCount++;
-                    else if (entry.type === 'PostData') postDataCount++;
+                    // Count by type (new entries only)
+                    if (entry.type === 'PreData') preDataCountNew++;
+                    else if (entry.type === 'PostData') postDataCountNew++;
                 }
             });
             
+            // NOW count TOTAL PreData/PostData across ALL collected data
+            let totalPreData = 0;
+            let totalPostData = 0;
+            for (const [key, entry] of this.collectedData) {
+                if (entry.type === 'PreData') totalPreData++;
+                else if (entry.type === 'PostData') totalPostData++;
+            }
+            
             this.currentDateEntriesCount = newUniqueCount;
             
-            // Calculate difference between PreData and PostData
-            const difference = Math.abs(preDataCount - postDataCount);
+            // Calculate difference between PreData and PostData (TOTAL, not just new)
+            const difference = Math.abs(totalPreData - totalPostData);
             const differenceStatus = difference <= 1 ? '✅' : '⚠️';
             
             console.log(`[SUMMARY] Date ${dateRange.start}: RawLogs=${entries.length}, NewUnique=${newUniqueCount}, TotalUnique=${this.uniqueKeys.size}`);
-            console.log(`[SUMMARY] ${differenceStatus} PreData=${preDataCount}, PostData=${postDataCount}, Difference=${difference} (${difference <= 1 ? 'GOOD - trades are balanced' : 'WARNING - imbalance detected'})`);
+            console.log(`[SUMMARY] ${differenceStatus} TOTAL: PreData=${totalPreData}, PostData=${totalPostData}, Difference=${difference} (${difference <= 1 ? 'GOOD - trades are balanced' : 'WARNING - imbalance detected'})`);
+            console.log(`[SUMMARY] New this date: PreData=${preDataCountNew}, PostData=${postDataCountNew}`);
             
             // Send message with PreData/PostData breakdown
             this.sendMessage({ 
@@ -427,8 +436,8 @@ class TVPineLogsExtractor {
                     rawLogs: entries.length,
                     newUnique: newUniqueCount,
                     totalUnique: this.uniqueKeys.size,
-                    preData: preDataCount,
-                    postData: postDataCount,
+                    preData: totalPreData,
+                    postData: totalPostData,
                     difference: difference,
                     balanced: difference <= 1
                 }
@@ -445,9 +454,21 @@ class TVPineLogsExtractor {
             if (currentDateEl) currentDateEl.textContent = this.currentDateEntriesCount;
             if (lastLoggedEl && newUniqueCount > 0) lastLoggedEl.textContent = new Date().toLocaleTimeString();
             
+            // Update PreData/PostData counts in UI
+            const preDataEl = document.getElementById('preDataCount');
+            const postDataEl = document.getElementById('postDataCount');
+            const differenceEl = document.getElementById('differenceCount');
+            
+            if (preDataEl) preDataEl.textContent = totalPreData;
+            if (postDataEl) postDataEl.textContent = totalPostData;
+            if (differenceEl) {
+                differenceEl.textContent = difference;
+                differenceEl.style.color = difference <= 1 ? '#4caf50' : '#ff9800';
+            }
+            
             // Update floating window with PreData/PostData info
             const balanceEmoji = difference <= 1 ? '✅' : '⚠️';
-            this.updateFloatingWindowStatus(`${balanceEmoji} Date ${dateRange.start}: Pre=${preDataCount}, Post=${postDataCount}, Diff=${difference}`, difference <= 1 ? 'success' : 'warning');
+            this.updateFloatingWindowStatus(`${balanceEmoji} Total: Pre=${totalPreData}, Post=${totalPostData}, Diff=${difference}`, difference <= 1 ? 'success' : 'warning');
             const currentSymbolEl = document.getElementById('currentSymbol');
             if (currentSymbolEl) currentSymbolEl.textContent = symbol;
             

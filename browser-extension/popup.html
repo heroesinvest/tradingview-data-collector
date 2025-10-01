@@ -348,22 +348,44 @@
         <div class="display-grid">
             <div class="display-item">
                 <div class="display-label">Total Log Entries</div>
-                <div class="display-value" id="totalEntries">000</div>
+                <div class="display-value" id="totalEntries">0</div>
             </div>
             <div class="display-item">
                 <div class="display-label">Unique Entries</div>
-                <div class="display-value" id="uniqueEntries">000</div>
+                <div class="display-value" id="uniqueEntries">0</div>
             </div>
         </div>
         
         <div class="display-grid">
             <div class="display-item">
-                <div class="display-label">Entries Today</div>
-                <div class="display-value" id="entriesToday">000</div>
+                <div class="display-label">PreData Entries</div>
+                <div class="display-value" id="preDataCount" style="color: #2196F3;">0</div>
+            </div>
+            <div class="display-item">
+                <div class="display-label">PostData Entries</div>
+                <div class="display-value" id="postDataCount" style="color: #9C27B0;">0</div>
+            </div>
+        </div>
+        
+        <div class="display-grid">
+            <div class="display-item">
+                <div class="display-label">Balance (Pre - Post)</div>
+                <div class="display-value" id="differenceCount" style="color: #4CAF50;">0</div>
             </div>
             <div class="display-item">
                 <div class="display-label">Last Logged</div>
                 <div class="display-value" id="lastLogged">-</div>
+            </div>
+        </div>
+        
+        <div class="display-grid">
+            <div class="display-item">
+                <div class="display-label">Last PreData</div>
+                <div class="display-value" id="lastPreDataDatetime" style="font-size: 11px; color: #2196F3;">-</div>
+            </div>
+            <div class="display-item">
+                <div class="display-label">Last PostData</div>
+                <div class="display-value" id="lastPostDataDatetime" style="font-size: 11px; color: #9C27B0;">-</div>
             </div>
         </div>
     </div>

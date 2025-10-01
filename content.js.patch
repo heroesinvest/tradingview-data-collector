@@ -1,0 +1,475 @@
+--- a/browser-extension/content.js
++++ b/browser-extension/content.js
+@@ -1046,80 +1046,374 @@ class TVPineLogsExtractor {
+         return 'UNKNOWN:SYMBOL';
+     }
+     
++    // ====================================================================
++    // ROBUST SYMBOL CHANGE - 3-TIER FALLBACK WITH VERIFICATION
++    // ====================================================================
++    
++    async focusChartCanvas() {
++        console.log('[DEBUG] Focusing chart canvas...');
++        // Try to focus the main chart pane/canvas
++        const chartSelectors = [
++            '[data-name="chart-pane"]',
++            '[data-role="chart"]',
++            '.chart-gui-wrapper',
++            '.layout__area--center',
++            'canvas[data-name="main-series"]',
++            '.chart-container',
++            '[class*="chart"][class*="pane"]'
++        ];
++        
++        for (const selector of chartSelectors) {
++            const element = document.querySelector(selector);
++            if (element && this.isElementVisible(element)) {
++                element.focus();
++                element.click(); // Ensure focus
++                console.log(`[DEBUG] ✓ Focused chart element: ${selector}`);
++                return true;
++            }
++        }
++        console.log('[DEBUG] Could not focus chart canvas');
++        return false;
++    }
++    
++    async typeOnChart(text) {
++        console.log(`[DEBUG] ⌨️ Typing on chart: ${text}`);
++        // Simulate character-by-character typing with realistic delays
++        for (const char of text) {
++            // keydown
++            document.dispatchEvent(new KeyboardEvent('keydown', {
++                key: char,
++                code: char === ':' ? 'Semicolon' : `Key${char.toUpperCase()}`,
++                shiftKey: char === ':',
++                bubbles: true,
++                cancelable: true
++            }));
++            
++            // keypress (for some frameworks)
++            document.dispatchEvent(new KeyboardEvent('keypress', {
++                key: char,
++                bubbles: true,
++                cancelable: true
++            }));
++            
++            // keyup
++            document.dispatchEvent(new KeyboardEvent('keyup', {
++                key: char,
++                code: char === ':' ? 'Semicolon' : `Key${char.toUpperCase()}`,
++                bubbles: true,
++                cancelable: true
++            }));
++            
++            await this.sleep(50); // Realistic typing speed
++        }
++        
++        // Press Enter
++        console.log('[DEBUG] ⏎ Pressing Enter to confirm');
++        document.dispatchEvent(new KeyboardEvent('keydown', {
++            key: 'Enter',
++            code: 'Enter',
++            keyCode: 13,
++            bubbles: true,
++            cancelable: true
++        }));
++        
++        await this.sleep(1000);
++    }
++    
++    async openSymbolSearch() {
++        console.log('[DEBUG] Opening symbol search...');
++        
++        // Method 1: Try toolbar button
++        const searchButtonSelectors = [
++            '[data-name="symbol-search"]',
++            '[aria-label*="Symbol" i][aria-label*="Search" i]',
++            '[data-name="symbol-search-button"]',
++            'button[title*="Symbol"]'
++        ];
++        
++        for (const selector of searchButtonSelectors) {
++            const button = document.querySelector(selector);
++            if (button && this.isElementVisible(button)) {
++                console.log(`[DEBUG] ✓ Found symbol search button: ${selector}`);
++                button.click();
++                await this.sleep(500);
++                return true;
++            }
++        }
++        
++        // Method 2: Try keyboard shortcut (Ctrl+K)
++        console.log('[DEBUG] Trying Ctrl+K shortcut');
++        document.dispatchEvent(new KeyboardEvent('keydown', {
++            key: 'k',
++            code: 'KeyK',
++            ctrlKey: true,
++            bubbles: true,
++            cancelable: true
++        }));
++        
++        await this.sleep(500);
++        return true;
++    }
++    
++    async setSearchInputValue(input, value) {
++        console.log(`[DEBUG] Setting search input value: ${value}`);
++        // React-safe value setter
++        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
++        nativeInputValueSetter.call(input, value);
++        
++        // Trigger React events
++        input.dispatchEvent(new Event('input', { bubbles: true }));
++        input.dispatchEvent(new Event('change', { bubbles: true }));
++    }
++    
++    async verifySymbol(expectedSymbol) {
++        console.log(`[DEBUG] 🔍 Verifying symbol changed to: ${expectedSymbol}`);
++        
++        // Poll for symbol verification (max 10 seconds)
++        const maxAttempts = 20;
++        const delay = 500;
++        
++        for (let attempt = 0; attempt < maxAttempts; attempt++) {
++            // Try multiple selectors for symbol display
++            const symbolSelectors = [
++                '[data-symbol]',
++                '[class*="symbol"][class*="info"]',
++                '[class*="chart-header"] [data-name="symbol"]',
++                '.tv-symbol-header__text',
++                '[data-name="legend-source-title"]',
++                '[class*="symbol"][class*="title"]'
++            ];
++            
++            for (const selector of symbolSelectors) {
++                const element = document.querySelector(selector);
++                if (element) {
++                    const displayedSymbol = element.getAttribute('data-symbol') || element.textContent || '';
++                    const normalizedDisplayed = displayedSymbol.toUpperCase().replace(/\\s+/g, '');
++                    const normalizedExpected = expectedSymbol.toUpperCase().replace(/\\s+/g, '');
++                    
++                    // Check exact match or ticker-only match
++                    const ticker = normalizedExpected.includes(':') ? normalizedExpected.split(':')[1] : normalizedExpected;
++                    if (normalizedDisplayed === normalizedExpected || 
++                        normalizedDisplayed.includes(ticker) ||
++                        normalizedDisplayed === ticker) {
++                        console.log(`[DEBUG] ✅ Symbol verified: ${displayedSymbol} matches ${expectedSymbol}`);
++                        return true;
++                    }
++                }
++            }
++            
++            // Wait before next check
++            if (attempt < maxAttempts - 1) {
++                await this.sleep(delay);
++            }
++        }
++        
++        console.warn(`[DEBUG] ⚠️ Symbol verification timeout for: ${expectedSymbol}`);
++        return false; // Timeout - but don't fail, continue with caution
++    }
++    
+     async navigateToSymbol(symbol) {
+-        console.log(`🔄 Changing symbol to: ${symbol}`);
++        console.log(`\\n${'='.repeat(60)}`);
++        console.log(`🔄 SYMBOL CHANGE: ${symbol}`);
++        console.log(`${'='.repeat(60)}\\n`);
+         
+         try {
+-            // Per user: "If you have anywhere selected/focused on the element or innerchildren
+-            // of the element below, you should be able to just type the new Symbol"
+-            // Target: <div class="layout__area--center"> which contains the chart toolbar
++            // ====== TIER 1: Chart Canvas Typing ======
++            console.log('[TIER 1] Attempting chart canvas typing...');
++            try {
++                const focused = await this.focusChartCanvas();
++                if (focused) {
++                    await this.typeOnChart(symbol);
++                    await this.sleep(1500);
++                    
++                    const verified = await this.verifySymbol(symbol);
++                    if (verified) {
++                        console.log('[TIER 1] ✅ SUCCESS - Symbol changed via chart typing');
++                        return true;
++                    }
++                }
++            } catch (error) {
++                console.log(`[TIER 1] ❌ Failed: ${error.message}`);
++            }
+             
+-            // Step 1: Find and focus on the chart center area
+-            const chartCenter = document.querySelector('.layout__area--center') || 
+-                               document.querySelector('[data-is-chart-toolbar-component="true"]') ||
+-                               document.querySelector('.chart-container');
++            // ====== TIER 2: Programmatic Symbol Search Dialog ======
++            console.log('[TIER 2] Attempting programmatic symbol search...');
++            try {
++                await this.openSymbolSearch();
++                
++                // Find search input
++                const inputSelectors = [
++                    'input[placeholder*="symbol" i]',
++                    'input[placeholder*="search" i]',
++                    'input[role="searchbox"]',
++                    '[role="dialog"] input[type="text"]',
++                    'input[type="text"]'
++                ];
++                
++                let searchInput = null;
++                for (const selector of inputSelectors) {
++                    const input = document.querySelector(selector);
++                    if (input && this.isElementVisible(input)) {
++                        searchInput = input;
++                        console.log(`[TIER 2] ✓ Found search input: ${selector}`);
++                        break;
++                    }
++                }
++                
++                if (searchInput) {
++                    searchInput.focus();
++                    await this.setSearchInputValue(searchInput, symbol);
++                    await this.sleep(1000); // Wait for results
++                    
++                    // Find and click first result
++                    const resultSelectors = [
++                        `[data-symbol="${symbol}"]`,
++                        '[role="row"]',
++                        '[class*="item"]',
++                        '[class*="result"]',
++                        '[data-role="list-item"]'
++                    ];
++                    
++                    let resultClicked = false;
++                    for (const selector of resultSelectors) {
++                        const results = document.querySelectorAll(selector);
++                        if (results.length > 0) {
++                            console.log(`[TIER 2] ✓ Clicking first result from: ${selector}`);
++                            results[0].click();
++                            resultClicked = true;
++                            await this.sleep(1500);
++                            break;
++                        }
++                    }
++                    
++                    if (resultClicked) {
++                        const verified = await this.verifySymbol(symbol);
++                        if (verified) {
++                            console.log('[TIER 2] ✅ SUCCESS - Symbol changed via search dialog');
++                            return true;
++                        }
++                    }
++                }
++            } catch (error) {
++                console.log(`[TIER 2] ❌ Failed: ${error.message}`);
++            }
+             
+-            if (!chartCenter) {
+-                throw new Error('Chart area not found for focusing');
++            // ====== TIER 3: Keyboard Shortcut + Type ======
++            console.log('[TIER 3] Attempting keyboard shortcut method...');
++            try {
++                await this.focusChartCanvas();
++                
++                // Try / key to open search
++                document.dispatchEvent(new KeyboardEvent('keydown', {
++                    key: '/',
++                    code: 'Slash',
++                    bubbles: true,
++                    cancelable: true
++                }));
++                
++                await this.sleep(500);
++                
++                // Now type the symbol
++                await this.typeOnChart(symbol);
++                await this.sleep(1500);
++                
++                const verified = await this.verifySymbol(symbol);
++                if (verified) {
++                    console.log('[TIER 3] ✅ SUCCESS - Symbol changed via keyboard shortcut');
++                    return true;
++                }
++            } catch (error) {
++                console.log(`[TIER 3] ❌ Failed: ${error.message}`);
+             }
+             
+-            console.log('[DEBUG] 🎯 Focusing on chart area...');
+-            chartCenter.focus();
+-            chartCenter.click(); // Click to ensure focus
+-            await this.sleep(500);
++            // ====== ALL TIERS FAILED ======
++            console.warn(`⚠️ All symbol change methods failed for: ${symbol}`);
++            console.warn('⚠️ Continuing anyway - data may be incorrect');
++            return false;
+             
+-            // Step 2: Clear any existing input by selecting all
+-            document.dispatchEvent(new KeyboardEvent('keydown', {
+-                key: 'a',
+-                code: 'KeyA',
+-                ctrlKey: true,
+-                bubbles: true
+-            }));
+-            await this.sleep(100);
++        } catch (error) {
++            console.error(`❌ Symbol change critical error for ${symbol}:`, error);
++            throw error;
++        }
++    }
++    
++    // ====================================================================
++    // REPLAY MODE - CLEAN STATE MANAGEMENT
++    // ====================================================================
++    
++    async findReplayButton() {
++        console.log('[DEBUG] Finding replay button...');
++        // Enhanced replay button search - EXCLUDE speed dropdown
++        const replaySelectors = [
++            '[data-name="replay"]',
++            'button[data-name="replay"]',
++            '[aria-label*="Replay"][aria-label*="mode"]',
++            '.chart-controls button[title*="Replay"]',
++            '[class*="toolbar"] button[class*="replay"]:not([class*="speed"])'
++        ];
++        
++        for (const selector of replaySelectors) {
++            try {
++                const buttons = document.querySelectorAll(selector);
++                for (const button of buttons) {
++                    if (!this.isElementVisible(button)) continue;
++                    
++                    // Validate: must NOT be speed button
++                    const text = (button.textContent || '').toLowerCase();
++                    const title = (button.getAttribute('title') || '').toLowerCase();
++                    const ariaLabel = (button.getAttribute('aria-label') || '').toLowerCase();
++                    
++                    // Skip speed buttons (10x, etc.)
++                    if (text.includes('×') || text.includes('10x') || 
++                        title.includes('speed') || ariaLabel.includes('speed')) {
++                        continue;
++                    }
++                    
++                    console.log(`[DEBUG] ✓ Found replay button: ${selector}`);
++                    return button;
++                }
++            } catch (e) {
++                console.log(`[DEBUG] Selector failed: ${selector}`);
++            }
++        }
++        
++        // Fallback: text search
++        const allButtons = document.querySelectorAll('button, [role="button"], [data-role="button"]');
++        for (const button of allButtons) {
++            if (!this.isElementVisible(button)) continue;
+             
+-            // Step 3: Type the symbol character by character
+-            console.log(`[DEBUG] ⌨️ Typing symbol: ${symbol}`);
+-            for (let i = 0; i < symbol.length; i++) {
+-                const char = symbol[i];
+-                
+-                // Dispatch key events
+-                document.dispatchEvent(new KeyboardEvent('keydown', {
+-                    key: char,
+-                    code: `Key${char.toUpperCase()}`,
+-                    bubbles: true,
+-                    cancelable: true
+-                }));
+-                
+-                document.dispatchEvent(new KeyboardEvent('keypress', {
+-                    key: char,
+-                    bubbles: true,
+-                    cancelable: true
+-                }));
+-                
+-                document.dispatchEvent(new KeyboardEvent('keyup', {
+-                    key: char,
+-                    bubbles: true,
+-                    cancelable: true
+-                }));
+-                
+-                await this.sleep(50); // Small delay between characters
++            const text = (button.textContent || '').toLowerCase();
++            const ariaLabel = (button.getAttribute('aria-label') || '').toLowerCase();
++            const title = (button.getAttribute('title') || '').toLowerCase();
++            
++            const hasReplay = text.includes('replay') || ariaLabel.includes('replay') || title.includes('replay');
++            const isSpeedButton = text.includes('10x') || text.includes('speed') || 
++                                 ariaLabel.includes('speed') || title.includes('speed');
++            
++            if (hasReplay && !isSpeedButton) {
++                console.log('[DEBUG] ✓ Found replay button by text');
++                return button;
+             }
++        }
++        
++        console.warn('[DEBUG] ⚠️ Replay button not found');
++        return null;
++    }
++    
++    async navigateToReplayMode() {
++        console.log('[DEBUG] Navigating to replay mode...');
++        
++        // First, ensure Pine Logs is activated
++        await this.activatePineLogsWidget();
++        
++        // Ensure clean replay state (handles dialog and activates if needed)
++        await this.ensureReplayCleanState();
++        
++        console.log('[DEBUG] ✅ Replay mode navigation complete');
++    }
++    
++    // ====================================================================
++    // ROBUST DATE LIST GENERATION - DAILY BOUNDARIES
++    // ====================================================================
++    
++    generateDateList(startDate, endDate) {
++        console.log(`[DEBUG] generateDateList: start=${startDate}, end=${endDate}`);
++        
++        // No dates provided - use current visible data (no replay)
++        if (!startDate && !endDate) {
++            console.log('[DEBUG] No dates specified, skipping replay mode');
++            return [];
++        }
++        
++        // Only one date provided - use it
++        if (startDate && !endDate) {
++            console.log(`[DEBUG] Only start date: ${startDate}`);
++            return [{ start: startDate, end: null }];
++        }
++        
++        if (!startDate && endDate) {
++            console.log(`[DEBUG] Only end date: ${endDate}`);
++            return [{ start: endDate, end: null }];
++        }
++        
++        // Both dates provided - generate DAILY boundaries
++        console.log(`[DEBUG] Generating daily date list: ${startDate} → ${endDate}`);
++        const dates = [];
++        
++        const start = new Date(startDate + 'T00:00:00Z'); // UTC
++        const end = new Date(endDate + 'T23:59:59Z'); // UTC
++        
++        if (start > end) {
++            console.warn('[DEBUG] Start date after end date, swapping');
++            [start, end] = [end, start];
++        }
++        
++        // Generate daily dates
++        const current = new Date(start);
++        while (current <= end) {
++            const dateStr = current.toISOString().split('T')[0]; // yyyy-MM-dd
++            dates.push({ start: dateStr, end: null });
+             
+-            await this.sleep(500);
++            // Move to next day
++            current.setUTCDate(current.getUTCDate() + 1);
++        }
++        
++        console.log(`[DEBUG] ✅ Generated ${dates.length} daily dates`);
++        return dates;
++    }
++    
++    // ====================================================================
++    // END OF NEW METHODS
++    // ====================================================================
++
