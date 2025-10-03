@@ -23,6 +23,7 @@ class TVPineLogsExtractor {
         this.totalEntriesCount = 0;
         this.currentDateEntriesCount = 0;
         this.currentSymbolEntriesCount = 0;
+        this.totalLogsProcessed = 0; // Initialize to prevent NaN
         this.lastLoggedTime = null;
         this.lastPreDataDatetime = null; // Last PreData datetime
         this.lastPostDataDatetime = null; // Last PostData datetime
@@ -509,6 +510,9 @@ class TVPineLogsExtractor {
             const maxScrollAttempts = 9999; // No hard limit - will stop when at bottom
             let consecutiveNoNewEntries = 0;
             const maxConsecutiveNoNewEntries = 20; // Stop after 20 scrolls with no new entries
+            let maxTimestampSeen = null; // Track the latest timestamp to detect real progress
+            let scrollsSinceTimestampAdvance = 0; // Count scrolls without timestamp advancing
+            let lastScrollHeight = 0; // Track if scrollHeight is growing
             
             // Scroll to top first
             console.log('[DEBUG] Scrolling to top of list...');
@@ -522,6 +526,18 @@ class TVPineLogsExtractor {
                 // Extract entries at current scroll position
                 const currentEntries = await this.extractVisibleLogEntries();
                 
+                // Track maximum timestamp seen to detect real progress
+                for (const entry of currentEntries) {
+                    const timestamp = entry.entry_datetime || entry.timestamp;
+                    if (timestamp) {
+                        if (!maxTimestampSeen || timestamp > maxTimestampSeen) {
+                            maxTimestampSeen = timestamp;
+                            scrollsSinceTimestampAdvance = 0;
+                            console.log(`[DEBUG] ⏰ New max timestamp: ${maxTimestampSeen}`);
+                        }
+                    }
+                }
+                
                 // Filter for new unique entries
                 const newEntries = currentEntries.filter(entry => {
                     const key = this.generateEntryKey(entry);
@@ -532,10 +548,15 @@ class TVPineLogsExtractor {
                     return true;
                 });
                 
-                console.log(`[DEBUG] Scroll ${scrollAttempts}: Found ${currentEntries.length} current, added ${newEntries.length} new, total: ${entries.length}`);
+                const currentScrollHeight = viewport.scrollHeight;
+                const scrollHeightGrowing = currentScrollHeight > lastScrollHeight;
+                lastScrollHeight = currentScrollHeight;
+                
+                console.log(`[DEBUG] Scroll ${scrollAttempts}: Found ${currentEntries.length} current, added ${newEntries.length} new, total: ${entries.length}, maxTimestamp: ${maxTimestampSeen ? maxTimestampSeen.substring(0, 19) : 'none'}`);
                 
                 if (newEntries.length === 0) {
                     consecutiveNoNewEntries++;
+                    scrollsSinceTimestampAdvance++;
                     
                     // Check if we've reached the bottom with more strict criteria
                     const scrollTop = viewport.scrollTop;
@@ -544,18 +565,21 @@ class TVPineLogsExtractor {
                     const distanceFromBottom = scrollHeight - (scrollTop + clientHeight);
                     const isAtBottom = distanceFromBottom < 50; // Within 50px of bottom
                     
+                    // Enhanced completion check: both near bottom AND timestamp not advancing
+                    const timestampStagnant = scrollsSinceTimestampAdvance >= 3;
+                    
                     if (consecutiveNoNewEntries >= maxConsecutiveNoNewEntries) {
-                        if (isAtBottom) {
-                            console.log(`✅ Extraction complete: Reached bottom (${Math.round(distanceFromBottom)}px from end) AND no new entries for ${maxConsecutiveNoNewEntries} scrolls`);
+                        if (isAtBottom && timestampStagnant && !scrollHeightGrowing) {
+                            console.log(`✅ Extraction complete: Reached bottom (${Math.round(distanceFromBottom)}px from end), no new entries for ${maxConsecutiveNoNewEntries} scrolls, and timestamp hasn't advanced for ${scrollsSinceTimestampAdvance} scrolls`);
                             break;
                         } else {
-                            console.log(`[DEBUG] No new entries but NOT at bottom yet (${Math.round(distanceFromBottom)}px remaining, scroll: ${Math.round(scrollTop)}/${scrollHeight}), continuing...`);
-                            // Reduce the counter to give more chances if not at bottom
+                            console.log(`[DEBUG] No new entries but continuing: atBottom=${isAtBottom}, timestampStagnant=${timestampStagnant}, scrollHeightGrowing=${scrollHeightGrowing}, ${Math.round(distanceFromBottom)}px remaining`);
+                            // Give more chances if conditions aren't met
                             consecutiveNoNewEntries = Math.floor(maxConsecutiveNoNewEntries / 2);
                         }
-                    } else if (isAtBottom && consecutiveNoNewEntries >= 5) {
-                        // Early exit if we're at bottom AND no new entries for 5 consecutive scrolls
-                        console.log(`✅ Early completion: At bottom with no new entries for ${consecutiveNoNewEntries} scrolls`);
+                    } else if (isAtBottom && timestampStagnant && consecutiveNoNewEntries >= 5) {
+                        // Early exit if we're at bottom AND timestamp not advancing AND no new entries
+                        console.log(`✅ Early completion: At bottom, timestamp stagnant for ${scrollsSinceTimestampAdvance} scrolls, no new entries for ${consecutiveNoNewEntries} scrolls`);
                         break;
                     }
                 } else {
@@ -602,17 +626,36 @@ class TVPineLogsExtractor {
     async findPineLogsContainer() {
         console.log('[DEBUG] findPineLogsContainer() called - searching for scrollable viewport...');
         
-        // Step 1: Find the Pine Logs panel/widget
-        const panel = await this.findPineLogsPanel();
-        if (!panel) {
-            console.error('[DEBUG] Pine Logs panel not found!');
-            return null;
-        }
+        const maxRetries = 3;
+        const baseDelay = 500;
         
-        // Step 2: Find the scrollable container within the panel
-        const container = await this.findVirtualListContainer(panel);
-        console.log('[DEBUG] Found scrollable container:', container);
-        return container;
+        for (let attempt = 0; attempt < maxRetries; attempt++) {
+            try {
+                // Step 1: Find the Pine Logs panel/widget
+                const panel = await this.findPineLogsPanel();
+                if (!panel) {
+                    throw new Error('Pine Logs panel not found');
+                }
+                
+                // Step 2: Find the scrollable container within the panel
+                const container = await this.findVirtualListContainer(panel);
+                console.log('[DEBUG] Found scrollable container:', container);
+                return container;
+                
+            } catch (error) {
+                const isLastAttempt = attempt === maxRetries - 1;
+                if (isLastAttempt) {
+                    console.error('[DEBUG] ❌ Failed to find Pine Logs container after ' + maxRetries + ' attempts');
+                    console.error('[DEBUG] Error: ' + error.message);
+                    throw error;
+                }
+                
+                const delay = baseDelay * Math.pow(2, attempt);
+                console.warn(`[DEBUG] ⚠️ Attempt ${attempt + 1}/${maxRetries} failed: ${error.message}`);
+                console.warn(`[DEBUG] Retrying in ${delay}ms...`);
+                await this.sleep(delay);
+            }
+        }
     }
     
     async findPineLogsPanel() {
@@ -657,69 +700,70 @@ class TVPineLogsExtractor {
     }
     
     async findVirtualListContainer(logsPanel) {
-        console.log('[DEBUG] Searching for virtual list container in:', logsPanel);
+        console.log('[DEBUG] Searching for virtual list container using behavior-based detection...');
         
-        // Primary: Look for the exact scrollable viewport from reference (corrected path)
-        const scrollViewport = logsPanel.querySelector('.logsList-L0IhqRpX .container-L0IhqRpX');
-        if (scrollViewport) {
-            console.log('[DEBUG] Found scroll viewport:', scrollViewport);
-            const style = window.getComputedStyle(scrollViewport);
-            console.log('[DEBUG] Viewport overflow-y:', style.overflowY);
-            console.log('[DEBUG] Viewport height:', scrollViewport.offsetHeight);
-            console.log('[DEBUG] Viewport scroll height:', scrollViewport.scrollHeight);
-            return scrollViewport;
+        // Behavior-based viewport discovery: find element with scrollable overflow and maximum scrollHeight
+        // This avoids reliance on hashed class names that TradingView may change
+        
+        const candidates = [];
+        const allElements = logsPanel.querySelectorAll('div');
+        
+        for (const element of allElements) {
+            // Skip if not visible
+            if (element.offsetParent === null) continue;
+            
+            const style = window.getComputedStyle(element);
+            const overflowY = style.overflowY;
+            
+            // Must have scrollable overflow
+            if (overflowY !== 'auto' && overflowY !== 'scroll') continue;
+            
+            // Calculate scrollable area
+            const scrollableHeight = element.scrollHeight - element.clientHeight;
+            
+            // Must have meaningful scrollable content (>100px)
+            if (scrollableHeight <= 100) continue;
+            
+            // Skip tiny containers
+            if (element.clientHeight < 100) continue;
+            
+            candidates.push({
+                element: element,
+                scrollHeight: element.scrollHeight,
+                clientHeight: element.clientHeight,
+                scrollableHeight: scrollableHeight,
+                className: element.className
+            });
         }
         
-        // Secondary: Look for container-* class (the actual scroll container)
-        const containerDiv = logsPanel.querySelector('[class*="container-"]');
-        if (containerDiv) {
-            const style = window.getComputedStyle(containerDiv);
-            if ((style.overflowY === 'auto' || style.overflowY === 'scroll') && 
-                containerDiv.scrollHeight > containerDiv.clientHeight + 100) {
-                console.log('[DEBUG] Found scrollable container with significant content:', containerDiv);
-                console.log('[DEBUG] ScrollHeight:', containerDiv.scrollHeight, 'ClientHeight:', containerDiv.clientHeight);
-                return containerDiv;
+        if (candidates.length === 0) {
+            console.error('[DEBUG] ❌ No scrollable viewport found with meaningful content!');
+            console.error('[DEBUG] This will cause virtual scrolling to fail.');
+            console.error('[DEBUG] Ensure Pine Logs panel is visible and expanded.');
+            throw new Error('Could not find scrollable Pine logs viewport. Virtual scrolling will not work. Please ensure Pine Logs panel is visible and expanded.');
+        }
+        
+        // Sort by scrollHeight descending - the largest is usually the real viewport
+        candidates.sort((a, b) => b.scrollHeight - a.scrollHeight);
+        
+        const best = candidates[0];
+        console.log(`[DEBUG] ✅ Found scrollable viewport using behavior-based detection:`);
+        console.log(`[DEBUG]    - scrollHeight: ${best.scrollHeight}px`);
+        console.log(`[DEBUG]    - clientHeight: ${best.clientHeight}px`);
+        console.log(`[DEBUG]    - scrollable area: ${best.scrollableHeight}px`);
+        console.log(`[DEBUG]    - className: ${best.className.substring(0, 100)}...`);
+        
+        // Verify this isn't the high-level panel wrapper (which would be logsPanel itself)
+        if (best.element === logsPanel) {
+            console.warn('[DEBUG] ⚠️ Best candidate is the logs panel wrapper itself - looking for child...');
+            if (candidates.length > 1) {
+                const secondBest = candidates[1];
+                console.log(`[DEBUG] Using second-best candidate with scrollHeight: ${secondBest.scrollHeight}px`);
+                return secondBest.element;
             }
         }
         
-        // Tertiary: Use reference fallback method to find scrollable element with MEANINGFUL scrollHeight
-        const allDivs = logsPanel.querySelectorAll('div');
-        for (const div of allDivs) {
-            const style = window.getComputedStyle(div);
-            // Only accept if there's at least 1000px of scrollable content (not just a few pixels)
-            if ((style.overflowY === 'auto' || style.overflowY === 'scroll') && 
-                div.scrollHeight > div.clientHeight + 1000) {
-                console.log('[DEBUG] Found scrollable div with significant content:', div);
-                console.log('[DEBUG] ScrollHeight:', div.scrollHeight, 'ClientHeight:', div.clientHeight);
-                return div;
-            }
-        }
-        
-        // Quaternary: Look for standard virtual list classes (but validate they scroll)
-        console.log('[DEBUG] Trying virtual list selectors...');
-        const virtualSelectors = [
-            '.list-L0IhqRpX',
-            '.virtualScroll-L0IhqRpX', 
-            '[class*="list-"]',
-            '[class*="virtual"]',
-            '[class*="scroll"]'
-        ];
-        
-        for (const selector of virtualSelectors) {
-            const element = logsPanel.querySelector(selector);
-            if (element) {
-                const virtualScrollable = element.scrollHeight > element.clientHeight + 100;
-                console.log(`[DEBUG] Checking ${selector}: scrollHeight=${element.scrollHeight}, clientHeight=${element.clientHeight}, scrollable=${virtualScrollable}`);
-                if (virtualScrollable) {
-                    console.log(`[DEBUG] ✅ Found virtual list: ${selector}`);
-                    return element;
-                }
-            }
-        }
-        
-        console.warn('[DEBUG] ⚠️ No scrollable viewport found, using Pine logs widget as fallback');
-        console.warn('[DEBUG] ⚠️ Scrolling may NOT WORK - virtual list may not load new items!');
-        return logsPanel;
+        return best.element;
     }
     
     async extractVisibleLogEntries() {
@@ -730,16 +774,11 @@ class TVPineLogsExtractor {
         console.log(`[DEBUG] Processing ${logElements.length} log elements`);
         
         let processedCount = 0;
-        let skippedAlreadyProcessed = 0;
         let skippedNotOurEntry = 0;
         let failedParse = 0;
         
         for (const logElement of logElements) {
-            // Skip if already processed
-            if (logElement.hasAttribute('data-tv-processed')) {
-                skippedAlreadyProcessed++;
-                continue;
-            }
+            // REMOVED: DOM-based processed flag - rely on content-based deduplication
             
             try {
                 // Get the text content
@@ -788,8 +827,7 @@ class TVPineLogsExtractor {
                     
                     entries.push(parsedData);
                     
-                    // Mark as processed
-                    logElement.setAttribute('data-tv-processed', 'true');
+                    // REMOVED: DOM marking - content-based deduplication handles this
                     
                     // Increment progress counters
                     this.totalEntriesCount++;
@@ -826,10 +864,10 @@ class TVPineLogsExtractor {
         
         console.log(`[DEBUG] Extraction stats:`);
         console.log(`  - Total elements found: ${logElements.length}`);
-        console.log(`  - Already processed (skipped): ${skippedAlreadyProcessed}`);
         console.log(`  - Not our entry (skipped): ${skippedNotOurEntry}`);
         console.log(`  - Failed JSON parse: ${failedParse}`);
         console.log(`  - Successfully extracted: ${entries.length}`);
+        console.log(`  - Content-based deduplication will handle any repeats`);
         
         return entries;
     }
@@ -1073,13 +1111,17 @@ class TVPineLogsExtractor {
                 console.log(`[DEBUG] Date generation: ✅ Added year-end ${endOfYearStr} (equals end date)`);
             }
             
-            // If this is the last year and end date is not Dec 31, add the end date
-            if (currentYear === endYear && endOfYearStr !== endDateStr) {
-                dates.push({ start: endDateStr, end: null });
-                console.log(`[DEBUG] Date generation: ✅ Added end date ${endDateStr} (final date)`);
-            }
-            
             currentYear++;
+        }
+        
+        // CRITICAL FIX: Always add the final end date if it's not already in the list
+        // This ensures we don't miss partial years (e.g., Jan-Oct 2025)
+        const endDateStr = this.formatDate(end);
+        const lastDateAdded = dates.length > 0 ? dates[dates.length - 1].start : null;
+        
+        if (lastDateAdded !== endDateStr) {
+            dates.push({ start: endDateStr, end: null });
+            console.log(`[DEBUG] Date generation: ✅ Added FINAL end date ${endDateStr} (ensures complete coverage including partial years)`);
         }
         
         console.log(`[DEBUG] Date generation: Generated ${dates.length} dates for range ${startDate} to ${endDate}:`, dates.map(d => d.start));
